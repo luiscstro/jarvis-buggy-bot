@@ -1,0 +1,127 @@
+# 🤡 Buggy, o Palhaço Estrela — Bot de Discord para RPG One Piece
+
+## 📋 Pré-requisitos
+- Python 3.10 ou superior
+- Conta no Discord Developer Portal
+- Conta gratuita no Groq (para a IA)
+
+---
+
+## 🔧 PASSO 1 — Criar o Bot no Discord
+
+1. Acesse: https://discord.com/developers/applications
+2. Clique em **"New Application"** → dê o nome **Buggy** (ou "Buggy o Palhaço Estrela")
+3. Vá na aba **Bot** → clique em **"Add Bot"**
+4. Em **"Privileged Gateway Intents"**, ative:
+   - ✅ **SERVER MEMBERS INTENT**
+   - ✅ **MESSAGE CONTENT INTENT**
+5. Copie o **TOKEN** do bot (você vai precisar desse token!)
+6. Para convidar para o servidor:
+   - Vá em **OAuth2 → URL Generator**
+   - Marque: `bot` e `applications.commands`
+   - Permissões: `Send Messages`, `Read Messages/View Channels`, `Manage Messages`, `Read Message History`
+   - Copie e acesse a URL gerada
+
+---
+
+## 🤖 PASSO 2 — Obter a API Key GRATUITA do Groq
+
+1. Acesse: https://console.groq.com
+2. Crie uma conta gratuita (pode usar Google/GitHub)
+3. Vá em **API Keys** → **"Create API Key"**
+4. Copie a chave (começa com `gsk_...`)
+
+> **Por que Groq?** É 100% gratuito, extremamente rápido e usa modelos LLaMA de alta qualidade. Limite generoso no plano free.
+
+---
+
+## ⚙️ PASSO 3 — Configurar o Bot
+
+Abra o arquivo `bot.py` e edite as linhas no topo:
+
+```python
+BOT_TOKEN = "SEU_TOKEN_DO_BOT_AQUI"     # Token copiado no passo 1
+GROQ_API_KEY = "SUA_CHAVE_GROQ_AQUI"    # Chave copiada no passo 2
+STAFF_ROLES = ["Developer", "Moderador"] # Nomes EXATOS dos cargos no seu servidor
+```
+
+> ⚠️ Os nomes em `STAFF_ROLES` precisam ser **idênticos** aos nomes dos cargos no Discord (respeitando maiúsculas/minúsculas).
+
+---
+
+## 📦 PASSO 4 — Instalar e Rodar
+
+```bash
+# Instalar dependências
+pip install -r requirements.txt
+
+# Rodar o bot
+python bot.py
+```
+
+---
+
+## 🎮 Como Usar
+
+### Qualquer membro do servidor:
+- Mencione `@Buggy` em qualquer mensagem → ele responde com IA como personagem
+- Escreva a palavra **buggy** em qualquer mensagem → ele responde
+
+### Staff (Developer / Moderação) — Modo Admin:
+
+Para entrar no **modo admin**, use o prefixo `admin:` após a menção:
+
+```
+@Buggy admin: <ordem em linguagem natural>
+```
+
+**Sem o prefixo `admin:`, o Buggy responde normalmente como personagem de RP.**
+
+| Exemplo de uso | O que faz |
+|----------------|-----------|
+| `@Buggy admin: fala no #geral que vai ter evento hoje` | Envia mensagem no canal |
+| `@Buggy admin: bloqueia a categoria RPG` | Silencia a IA na categoria |
+| `@Buggy admin: apaga as últimas 10 mensagens suas aqui` | Limpa msgs do Buggy |
+| `@Buggy admin: apaga as últimas 5 msgs do @fulano` | Limpa msgs de um usuário |
+| `@Buggy admin: ativa slowmode de 30s no #geral` | Ativa slowmode |
+| `@Buggy admin: quais canais estão bloqueados?` | Lista canais silenciados |
+| `@Buggy admin: ajuda` | Lista todos os exemplos |
+
+### Slash Commands de Staff (forma alternativa):
+
+| Comando | Descrição |
+|---------|-----------|
+| `/buggy_falar [mensagem]` | Buggy fala no canal atual |
+| `/buggy_falar_canal [#canal] [mensagem]` | Buggy fala em canal específico |
+| `/buggy_editar [id_da_mensagem] [novo_texto]` | Edita uma mensagem do Buggy |
+| `/buggy_apagar [id_da_mensagem]` | Apaga uma mensagem específica |
+| `/buggy_limpar [N]` | Apaga as últimas N mensagens do Buggy (máx. 100) |
+| `/buggy_limpar_tudo` | Apaga TODAS as mensagens do Buggy no canal |
+| `/buggy_ajuda` | Lista todos os comandos |
+
+> **Como pegar o ID de uma mensagem:** Ative o Modo Desenvolvedor no Discord (Configurações → Avançado → Modo Desenvolvedor), depois clique com botão direito na mensagem → "Copiar ID".
+
+---
+
+## 🌐 Rodar 24/7 (Opcional)
+
+Para manter o bot sempre online, você pode usar:
+- **Railway** (https://railway.app) — plano gratuito disponível
+- **Render** (https://render.com) — plano gratuito disponível
+- **VPS/servidor próprio**
+
+---
+
+## ❓ Dúvidas Comuns
+
+**O bot não responde quando escrevo "buggy":**
+Verifique se o `MESSAGE CONTENT INTENT` está ativado no painel do bot.
+
+**Staff menciona o Buggy mas ele entra em modo admin sem querer:**
+Agora só entra em modo admin com `@Buggy admin: <instrução>`. Sem o prefixo, responde normalmente.
+
+**Os slash commands não aparecem:**
+Aguarde até 1 hora após convidar o bot. Ou expulse e re-convide o bot.
+
+**Erro de permissão nos comandos de staff:**
+Verifique se o nome do cargo em `STAFF_ROLES` no `bot.py` está **exatamente igual** ao do Discord.
