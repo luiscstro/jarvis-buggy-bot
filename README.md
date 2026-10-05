@@ -119,7 +119,20 @@ Para entrar no **modo admin**, use o prefixo `admin:` após a menção:
 - Botões: página anterior/próxima, **Atualizar** e **Exportar CSV** (todas as compras, abre direto no Excel).
 - Só existe um painel por vez: rodar o comando de novo move o painel.
 
+### Onde os dados ficam (Firebase)
+
+Os pedidos são salvos no **Firebase Firestore** (plano gratuito Spark), com uma cópia em `store_data.json`. Assim o histórico sobrevive a redeploys da hospedagem. Se o Firebase falhar, a compra continua normalmente: o bot guarda no arquivo local e reenvia sozinho (a cada 5 minutos) quando o Firebase voltar. Ao iniciar, ele junta as duas cópias e vale o registro mais recente de cada pedido.
+
+Como configurar:
+1. Em [console.firebase.google.com](https://console.firebase.google.com), crie um projeto e ative o **Firestore Database** (modo produção).
+2. Em *Configurações do projeto → Contas de serviço*, clique em **Gerar nova chave privada** e salve o `.json` como `firebase-credentials.json` na pasta do bot (já está no `.gitignore`).
+   - Alternativa: coloque o conteúdo do arquivo em base64 na variável `FIREBASE_CREDENTIALS_BASE64` do `.env`.
+3. Reinicie o bot e use `buggy!loja_armazenamento` (staff) para confirmar que aparece **Firebase conectado**.
+
+⚠️ O arquivo de credenciais dá acesso total ao banco: **nunca** o coloque no GitHub.
+
 Configuração (no `.env`):
+- `FIREBASE_CREDENTIALS_BASE64` / `FIREBASE_CREDENTIALS_FILE` — credenciais do Firebase (veja acima). Sem elas o bot usa só o arquivo local.
 - `PIX_COPIA_COLA` — código PIX "copia e cola" da conta que recebe. O bot embute o valor de cada compra e gera o QR Code. **Nunca coloque no código nem no GitHub.** Se faltar ou for inválido, o ticket abre sem PIX.
 - `LOJA_CATEGORIA_ID` — categoria onde os canais de compra são criados.
 - `LOJA_CARGO_ALERTA_ID` — cargo avisado em toda compra (padrão: o cargo citado no texto da loja).

@@ -9,11 +9,12 @@ Fluxo:
      do pedido, o total a pagar e o PIX (copia e cola + QR Code) já com o valor.
   4. A staff marca a compra como paga/entregue no próprio canal e acompanha tudo
      no painel ao vivo (`buggy!loja_dashboard`).
+
+Os pedidos são guardados no Firebase Firestore (com cópia local); veja loja_dados.py.
 """
 import asyncio
 import csv
 import io
-import json
 import os
 import re
 import unicodedata
@@ -25,6 +26,7 @@ from discord import ui
 from discord.ext import commands
 
 import pix
+from loja_dados import Armazenamento, agora_iso
 
 # =============================================
 #  CONFIGURAÇÕES
@@ -188,10 +190,6 @@ def linhas_carrinho(carrinho: dict[str, int]) -> str:
     )
 
 
-def agora_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def epoch(iso: str) -> int:
     return int(datetime.fromisoformat(iso).timestamp())
 
@@ -202,50 +200,6 @@ def data_brasilia(iso: Optional[str]) -> str:
 
 def itens_texto(itens: dict[str, int]) -> str:
     return ", ".join(f"{q}x {ITENS.get(k, {'nome': k})['nome']}" for k, q in itens.items())
-
-
-class Armazenamento:
-    """Contador de compras e histórico de pedidos, persistidos em JSON."""
-
-    def __init__(self, caminho: str):
-        self.caminho = caminho
-        self.dados = {"ultimo_id": 0, "pedidos": {}, "dashboard": None}
-        if os.path.exists(caminho):
-            with open(caminho, "r", encoding="utf-8") as f:
-                self.dados.update(json.load(f))
-
-    def _salvar(self):
-        tmp = self.caminho + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self.dados, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, self.caminho)
-
-    def proximo_id(self) -> int:
-        return self.dados["ultimo_id"] + 1
-
-    def registrar(self, compra_id: int, pedido: dict):
-        self.dados["ultimo_id"] = compra_id
-        self.dados["pedidos"][f"{compra_id:02d}"] = pedido
-        self._salvar()
-
-    def atualizar(self, chave: str, **campos):
-        self.dados["pedidos"][chave].update(campos)
-        self._salvar()
-
-    def por_canal(self, canal_id: int) -> Optional[tuple[str, dict]]:
-        for chave, pedido in self.dados["pedidos"].items():
-            if pedido.get("canal_id") == canal_id:
-                return chave, pedido
-        return None
-
-    def todos(self) -> list[dict]:
-        """Todos os pedidos, do mais recente para o mais antigo."""
-        return [self.dados["pedidos"][c] for c in sorted(self.dados["pedidos"], key=int, reverse=True)]
-
-    def definir_dashboard(self, canal_id: Optional[int], mensagem_id: Optional[int] = None):
-        """Guarda onde está o painel ao vivo (None, None esquece o painel)."""
-        self.dados["dashboard"] = {"canal_id": canal_id, "mensagem_id": mensagem_id} if canal_id else None
-        self._salvar()
 
 
 # =============================================
@@ -580,10 +534,10 @@ class DashboardView(ui.View):
 #  COG
 # =============================================
 class LojaCog(commands.Cog):
-    def __init__(self, bot: commands.Bot, staff_roles: list[str]):
+    def __init__(self, bot: commands.Bot, staff_roles: list[str], armazenamento: Armazenamento):
         self.bot = bot
         self.staff_roles = staff_roles
-        self.armazenamento = Armazenamento(LOJA_ARQUIVO)
+        self.armazenamento = armazenamento
         self.lock = asyncio.Lock()
         self.dash_pagina = 0
 
@@ -641,6 +595,33 @@ class LojaCog(commands.Cog):
             await ctx.message.delete()
         except (discord.Forbidden, discord.NotFound):
             pass
+
+    # ---------- buggy!loja_armazenamento ----------
+    @commands.command(name="loja_armazenamento")
+    async def loja_armazenamento(self, ctx: commands.Context):
+        """[Staff] Mostra onde os pedidos estão sendo salvos e se o Firebase está funcionando."""
+        if not self.eh_staff(ctx.author):
+            await ctx.send("⛔ Sem permissão, tripulante!")
+            return
+        st = self.armazenamento.status()
+        if not st["firebase"]:
+            situacao = "⚠️ **Só arquivo local** (Firebase não configurado). Os dados somem se a hospedagem trocar os arquivos."
+        elif st["firebase_ok_na_partida"] is False:
+            situacao = "⚠️ **Firebase configurado, mas não consegui ler na partida.** Usando o arquivo local."
+        elif st["ultimo_erro"]:
+            situacao = "⚠️ **Firebase conectado, mas a última gravação falhou.** O bot tenta de novo sozinho."
+        else:
+            situacao = "✅ **Firebase conectado** (com cópia no arquivo local)."
+        linhas = [
+            situacao,
+            f"📦 Pedidos: **{st['pedidos']}** · último ID: **{st['ultimo_id']:02d}**",
+        ]
+        if st["firebase"]:
+            ultima = f"<t:{epoch(st['ultima_sync'])}:R>" if st["ultima_sync"] else "ainda nenhuma nesta sessão"
+            linhas.append(f"🔄 Última gravação no Firebase: {ultima} · na fila: **{st['pendentes']}**")
+            if st["ultimo_erro"]:
+                linhas.append(f"❌ Último erro: `{st['ultimo_erro'][:200]}`")
+        await ctx.send("\n".join(linhas))
 
     async def atualizar_dashboard(self):
         """Reedita o painel ao vivo. Nunca levanta erro: o painel não pode quebrar uma compra."""
@@ -854,4 +835,5 @@ class LojaCog(commands.Cog):
 
 
 async def setup_loja(bot: commands.Bot, staff_roles: list[str]):
-    await bot.add_cog(LojaCog(bot, staff_roles))
+    armazenamento = await Armazenamento.criar(LOJA_ARQUIVO)
+    await bot.add_cog(LojaCog(bot, staff_roles, armazenamento))

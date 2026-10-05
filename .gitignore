@@ -3,8 +3,10 @@
 .env.*
 !.env.example
 
-# Credenciais (ex.: service account do Google)
+# Credenciais (service accounts do Google/Firebase) — dão acesso total ao banco!
 bot-discord-*.json
+firebase-credentials.json
+*firebase-adminsdk*.json
 
 # Cache do Python
 __pycache__/
