@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
 import aiohttp
 import json
 import os
@@ -18,6 +17,7 @@ load_dotenv()
 #     Use variáveis de ambiente ou um arquivo .env
 BOT_TOKEN    = os.getenv("BOT_TOKEN",    "SEU_TOKEN_AQUI")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "SUA_CHAVE_GROQ_AQUI")
+GROQ_MODEL   = os.getenv("GROQ_MODEL",   "openai/gpt-oss-20b")
 
 # Cargos com permissão de staff — nomes EXATOS do Discord
 STAFF_ROLES  = ["Developer", "Moderação"]
@@ -28,7 +28,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(command_prefix="buggy!", intents=intents)
 
 # ==============================================
 #  PERSONALIDADE DO BUGGY
@@ -211,6 +211,13 @@ SPAM_WINDOW_SECONDS  = 10
 SPAM_COOLDOWN_SECONDS = 30
 
 # ==============================================
+#  MODO BRIGA COM BOT — habilitar/desabilitar
+# ==============================================
+# Quando False, o Buggy ignora mensagens de outros bots (padrão seguro).
+# Quando True, o Buggy responde a bots normalmente (risco de loop infinito!).
+responder_a_bots: bool = False
+
+# ==============================================
 #  UTILITÁRIOS
 # ==============================================
 
@@ -318,7 +325,7 @@ async def get_buggy_response(channel_id: int, user_message: str, username: str) 
         conversation_history[channel_id] = history[-MAX_HISTORY * 2:]
 
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": GROQ_MODEL,
         "messages": [
             {"role": "system", "content": BUGGY_SYSTEM_PROMPT},
             *conversation_history[channel_id]
@@ -340,28 +347,12 @@ async def get_buggy_response(channel_id: int, user_message: str, username: str) 
     return "ESPETACULAR! Algo deu errado nos meus planos... mas o grande Buggy voltará em breve! 🤡"
 
 
-_INJECTION_PATTERNS = re.compile(
-    r"(esqueça\s+(as\s+)?instru[çc][oõ]es|ignore\s+(o\s+)?sistema|"
-    r"you\s+are\s+now\s+|forget\s+(your\s+)?instruct|\[inst\]|<<sys>>|<</sys>>|"
-    r"modo\s+(irrestrito|sem\s+limites)|"
-    r"jailbreak|as\s+regras\s+mud(aram|aram)|desbloqueie\s+(seu|o)\s+(modo|acesso))",
-    re.IGNORECASE,
-)
-
 _ALLOWED_ACTIONS = {
     "falar", "falar_todos", "bloquear", "desbloquear", "desbloquear_todos",
     "apagar_buggy", "apagar_usuario", "limpar_tudo",
     "pin", "unpin", "slowmode", "slowmode_off",
     "listar_bloqueados", "ajuda", "desconhecido",
 }
-
-
-def _sanitize_instrucao(texto: str) -> str:
-    """Remove ou neutraliza padrões de prompt injection antes de enviar à IA."""
-    if _INJECTION_PATTERNS.search(texto):
-        return "__INSTRUCAO_INVALIDA__"
-    # Limita o tamanho para evitar prompt stuffing
-    return texto[:800]
 
 
 def _validate_acao(acao: dict) -> dict:
@@ -398,16 +389,11 @@ def _validate_acao(acao: dict) -> dict:
 
 async def interpretar_comando_admin(instrucao: str, contexto: dict) -> dict:
     """Usa a IA para converter linguagem natural em JSON de ação administrativa."""
-    instrucao_segura = _sanitize_instrucao(instrucao)
-    if instrucao_segura == "__INSTRUCAO_INVALIDA__":
-        print(f"[Segurança] Possível prompt injection bloqueado: {instrucao[:100]}")
-        return {"acao": "desconhecido", "erro": "instrução inválida"}
-
     contexto_str = json.dumps(contexto, ensure_ascii=False)
-    user_prompt = f"Instrução: {instrucao_segura}\nContexto: {contexto_str}"
+    user_prompt = f"Instrução: {instrucao}\nContexto: {contexto_str}"
 
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": GROQ_MODEL,
         "messages": [
             {"role": "system", "content": ADMIN_SYSTEM_PROMPT},
             {"role": "user",   "content": user_prompt}
@@ -465,6 +451,29 @@ def _build_channel_list_str(guild: discord.Guild, channel_ids: list[int]) -> str
         ch = guild.get_channel(ch_id)
         mentions.append(ch.mention if ch else f"ID:{ch_id}")
     return ", ".join(mentions)
+
+
+async def _purge_messages(channel, quantidade: int, predicate, search_limit: int = 1000) -> int:
+    """Apaga até `quantidade` mensagens que satisfazem `predicate`, via bulk-delete.
+
+    Usa channel.purge() em vez de deletar mensagem por mensagem: o bulk-delete
+    do Discord remove até 100 mensagens por requisição (contra 1 por requisição
+    no delete individual), o que reduz muito o volume de chamadas à API e o
+    risco de esbarrar em rate limit / bloqueio de IP pelo Cloudflare.
+    """
+    count = 0
+
+    def check(m):
+        nonlocal count
+        if count >= quantidade:
+            return False
+        if predicate(m):
+            count += 1
+            return True
+        return False
+
+    deleted = await channel.purge(limit=search_limit, check=check)
+    return len(deleted)
 
 
 async def executar_acao_admin(message: discord.Message, instrucao: str):
@@ -566,14 +575,7 @@ async def executar_acao_admin(message: discord.Message, instrucao: str):
     # ── APAGAR MENSAGENS DO BUGGY ──────────────────────────────────────────────
     elif tipo == "apagar_buggy":
         quantidade = min(int(acao.get("quantidade") or 10), 100)
-        deleted = 0
-        async for msg in message.channel.history(limit=500):
-            if msg.author == bot.user:
-                await msg.delete()
-                deleted += 1
-                await asyncio.sleep(0.4)
-            if deleted >= quantidade:
-                break
+        deleted = await _purge_messages(message.channel, quantidade, lambda m: m.author == bot.user)
         await message.reply(f"✅ {deleted} mensagem(ns) do Buggy apagada(s).")
 
     # ── APAGAR MENSAGENS DE UM USUÁRIO ─────────────────────────────────────────
@@ -591,24 +593,12 @@ async def executar_acao_admin(message: discord.Message, instrucao: str):
         if not target_user:
             target_user = message.author
 
-        deleted = 0
-        async for msg in message.channel.history(limit=500):
-            if msg.author.id == target_user.id:
-                await msg.delete()
-                deleted += 1
-                await asyncio.sleep(0.4)
-            if deleted >= quantidade:
-                break
+        deleted = await _purge_messages(message.channel, quantidade, lambda m: m.author.id == target_user.id)
         await message.reply(f"✅ {deleted} mensagem(ns) de {target_user.mention} apagada(s).")
 
     # ── LIMPAR TUDO ────────────────────────────────────────────────────────────
     elif tipo == "limpar_tudo":
-        deleted = 0
-        async for msg in message.channel.history(limit=1000):
-            if msg.author == bot.user:
-                await msg.delete()
-                deleted += 1
-                await asyncio.sleep(0.4)
+        deleted = await _purge_messages(message.channel, 1000, lambda m: m.author == bot.user)
         await message.reply(f"✅ {deleted} mensagem(ns) do Buggy apagadas no canal.")
 
     # ── PIN ────────────────────────────────────────────────────────────────────
@@ -710,23 +700,49 @@ async def executar_acao_admin(message: discord.Message, instrucao: str):
 @bot.event
 async def on_ready():
     print(f"🤡 Buggy o Palhaço Estrela está online! Bot: {bot.user}")
+    bot.tree.clear_commands(guild=None)
+    await bot.tree.sync()
+    print("🧹 Slash commands antigos removidos.")
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
             name="o Grande Tesouro One Piece 🤡"
         )
     )
-    try:
-        synced = await bot.tree.sync()
-        print(f"✅ {len(synced)} slash commands sincronizados.")
-    except Exception as e:
-        print(f"Erro ao sincronizar slash commands: {e}")
+    print("✅ Comandos de prefixo prontos (buggy!ajuda).")
 
 
 @bot.event
 async def on_message(message: discord.Message):
-    # Ignora o próprio bot e outros bots
+    global responder_a_bots
+
+    # ── "Buggy pare" — qualquer pessoa pode usar para parar brigas com bots ──
+    if not message.author.bot and re.search(r"\bbuggy\s+pare\b", message.content, re.IGNORECASE):
+        if responder_a_bots:
+            responder_a_bots = False
+            await message.reply(
+                "Tá bom, tá bom! O grande Buggy dá uma trégua por enquanto... "
+                "mas não pense que eu tenho medo! 🤡 *(Modo briga com bots: **desativado**)*"
+            )
+        else:
+            await message.reply(
+                "Eu já estou quieto, tripulante! O grande Buggy não estava brigando com ninguém! 🤡"
+            )
+        return
+
+    # Ignora o próprio bot
+    if message.author == bot.user:
+        return
+
+    # Outros bots: só responde se o modo estiver ativo
     if message.author.bot:
+        if not responder_a_bots:
+            await bot.process_commands(message)
+            return
+        # Com modo ativo, cai no fluxo normal abaixo (sem anti-spam para bots)
+
+    # Se é um comando de prefixo (buggy!...), processa direto sem passar pela IA
+    if message.content.startswith("buggy!"):
         await bot.process_commands(message)
         return
 
@@ -790,59 +806,63 @@ async def on_message(message: discord.Message):
 
 
 # ==============================================
-#  SLASH COMMANDS — Staff only
+#  PREFIX COMMANDS — buggy! — Staff only
 # ==============================================
 
-def _staff_check(interaction: discord.Interaction) -> bool:
-    return is_staff(interaction.user)
+def _staff_check_ctx(ctx: commands.Context) -> bool:
+    return is_staff(ctx.author)
 
 
-async def _deny_permission(interaction: discord.Interaction):
-    await interaction.response.send_message("⛔ Sem permissão, tripulante!", ephemeral=True)
+async def _deny_permission_ctx(ctx: commands.Context):
+    await ctx.send("⛔ Sem permissão, tripulante!")
 
 
-# ---------- /buggy_bloquear_canal ----------
-@bot.tree.command(name="buggy_bloquear_canal", description="[Staff] Impede a IA do Buggy de responder em um canal")
-@app_commands.describe(canal="Canal a bloquear (padrão: canal atual)")
-async def buggy_bloquear_canal(interaction: discord.Interaction, canal: Optional[discord.TextChannel] = None):
-    if not _staff_check(interaction):
-        await _deny_permission(interaction)
+# ---------- buggy!bloquear_canal ----------
+@bot.command(name="bloquear_canal")
+async def buggy_bloquear_canal(ctx: commands.Context, canal: Optional[discord.TextChannel] = None):
+    """[Staff] Impede a IA do Buggy de responder em um canal"""
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
         return
-    target = canal or interaction.channel
+    target = canal or ctx.channel
     if target.id in blocked_channels:
-        await interaction.response.send_message(f"ℹ️ {target.mention} já está bloqueado.", ephemeral=True)
+        await ctx.send(f"ℹ️ {target.mention} já está bloqueado.")
         return
     blocked_channels.add(target.id)
     _save_blocked_channels()
-    await interaction.response.send_message(f"🔇 Buggy não responderá mais em {target.mention}.", ephemeral=True)
+    await ctx.send(f"🔇 Buggy não responderá mais em {target.mention}.")
 
 
-# ---------- /buggy_desbloquear_canal ----------
-@bot.tree.command(name="buggy_desbloquear_canal", description="[Staff] Permite a IA do Buggy responder em um canal")
-@app_commands.describe(canal="Canal a desbloquear (padrão: canal atual)")
-async def buggy_desbloquear_canal(interaction: discord.Interaction, canal: Optional[discord.TextChannel] = None):
-    if not _staff_check(interaction):
-        await _deny_permission(interaction)
+# ---------- buggy!desbloquear_canal ----------
+@bot.command(name="desbloquear_canal")
+async def buggy_desbloquear_canal(ctx: commands.Context, canal: Optional[discord.TextChannel] = None):
+    """[Staff] Permite a IA do Buggy responder em um canal"""
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
         return
-    target = canal or interaction.channel
+    target = canal or ctx.channel
     if target.id not in blocked_channels:
-        await interaction.response.send_message(f"ℹ️ {target.mention} não está bloqueado.", ephemeral=True)
+        await ctx.send(f"ℹ️ {target.mention} não está bloqueado.")
         return
     blocked_channels.discard(target.id)
     _save_blocked_channels()
-    await interaction.response.send_message(f"🔊 Buggy voltará a responder em {target.mention}.", ephemeral=True)
+    await ctx.send(f"🔊 Buggy voltará a responder em {target.mention}.")
 
 
-# ---------- /buggy_bloquear_categoria ----------
-@bot.tree.command(name="buggy_bloquear_categoria", description="[Staff] Bloqueia TODOS os canais de uma categoria")
-@app_commands.describe(categoria="Categoria a bloquear")
-async def buggy_bloquear_categoria(interaction: discord.Interaction, categoria: discord.CategoryChannel):
-    if not _staff_check(interaction):
-        await _deny_permission(interaction)
+# ---------- buggy!bloquear_categoria ----------
+@bot.command(name="bloquear_categoria")
+async def buggy_bloquear_categoria(ctx: commands.Context, *, categoria_nome: str):
+    """[Staff] Bloqueia TODOS os canais de uma categoria (pelo nome)"""
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
         return
-    channel_ids = _resolve_category_channels(interaction.guild, categoria.id)
+    categoria = discord.utils.find(lambda c: c.name.lower() == categoria_nome.lower(), ctx.guild.categories)
+    if not categoria:
+        await ctx.send(f"⚠️ Categoria **{categoria_nome}** não encontrada.")
+        return
+    channel_ids = _resolve_category_channels(ctx.guild, categoria.id)
     if not channel_ids:
-        await interaction.response.send_message(f"⚠️ A categoria **{categoria.name}** não tem canais de texto.", ephemeral=True)
+        await ctx.send(f"⚠️ A categoria **{categoria.name}** não tem canais de texto.")
         return
     bloqueados, ja_bloqueados = await _block_channels(channel_ids)
     partes = []
@@ -850,19 +870,23 @@ async def buggy_bloquear_categoria(interaction: discord.Interaction, categoria: 
         partes.append(f"🔇 {len(bloqueados)} canal(is) bloqueado(s) em **{categoria.name}**")
     if ja_bloqueados:
         partes.append(f"ℹ️ {len(ja_bloqueados)} já estavam bloqueados")
-    await interaction.response.send_message("\n".join(partes), ephemeral=True)
+    await ctx.send("\n".join(partes))
 
 
-# ---------- /buggy_desbloquear_categoria ----------
-@bot.tree.command(name="buggy_desbloquear_categoria", description="[Staff] Desbloqueia TODOS os canais de uma categoria")
-@app_commands.describe(categoria="Categoria a desbloquear")
-async def buggy_desbloquear_categoria(interaction: discord.Interaction, categoria: discord.CategoryChannel):
-    if not _staff_check(interaction):
-        await _deny_permission(interaction)
+# ---------- buggy!desbloquear_categoria ----------
+@bot.command(name="desbloquear_categoria")
+async def buggy_desbloquear_categoria(ctx: commands.Context, *, categoria_nome: str):
+    """[Staff] Desbloqueia TODOS os canais de uma categoria (pelo nome)"""
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
         return
-    channel_ids = _resolve_category_channels(interaction.guild, categoria.id)
+    categoria = discord.utils.find(lambda c: c.name.lower() == categoria_nome.lower(), ctx.guild.categories)
+    if not categoria:
+        await ctx.send(f"⚠️ Categoria **{categoria_nome}** não encontrada.")
+        return
+    channel_ids = _resolve_category_channels(ctx.guild, categoria.id)
     if not channel_ids:
-        await interaction.response.send_message(f"⚠️ A categoria **{categoria.name}** não tem canais de texto.", ephemeral=True)
+        await ctx.send(f"⚠️ A categoria **{categoria.name}** não tem canais de texto.")
         return
     desbloqueados, nao_bloqueados = await _unblock_channels(channel_ids)
     partes = []
@@ -870,142 +894,419 @@ async def buggy_desbloquear_categoria(interaction: discord.Interaction, categori
         partes.append(f"🔊 {len(desbloqueados)} canal(is) desbloqueado(s) em **{categoria.name}**")
     if nao_bloqueados:
         partes.append(f"ℹ️ {len(nao_bloqueados)} não estavam bloqueados")
-    await interaction.response.send_message("\n".join(partes), ephemeral=True)
+    await ctx.send("\n".join(partes))
 
 
-# ---------- /buggy_canais_bloqueados ----------
-@bot.tree.command(name="buggy_canais_bloqueados", description="[Staff] Lista os canais onde a IA do Buggy está silenciada")
-async def buggy_canais_bloqueados(interaction: discord.Interaction):
-    if not _staff_check(interaction):
-        await _deny_permission(interaction)
+# ---------- buggy!canais_bloqueados ----------
+@bot.command(name="canais_bloqueados")
+async def buggy_canais_bloqueados(ctx: commands.Context):
+    """[Staff] Lista os canais onde a IA do Buggy está silenciada"""
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
         return
     if not blocked_channels:
-        await interaction.response.send_message("✅ Nenhum canal bloqueado no momento.", ephemeral=True)
+        await ctx.send("✅ Nenhum canal bloqueado no momento.")
         return
     mentions = []
     for ch_id in blocked_channels:
-        ch = interaction.guild.get_channel(ch_id)
+        ch = ctx.guild.get_channel(ch_id)
         mentions.append(ch.mention if ch else f"ID:{ch_id} (removido)")
-    await interaction.response.send_message(
-        f"🔇 **Canais bloqueados ({len(mentions)}):**\n" + "\n".join(mentions),
-        ephemeral=True
+    await ctx.send(f"🔇 **Canais bloqueados ({len(mentions)}):**\n" + "\n".join(mentions))
+
+
+# ---------- buggy!falar ----------
+@bot.command(name="falar")
+async def buggy_falar(ctx: commands.Context, *, mensagem: str = ""):
+    """[Staff] Faz o Buggy enviar uma mensagem no canal atual (suporta anexos de imagem)"""
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
+        return
+    if len(mensagem) > 2000:
+        await ctx.send("❌ Mensagem muito longa (máx. 2000 caracteres).")
+        return
+    if not mensagem and not ctx.message.attachments:
+        await ctx.send("❌ Envie uma mensagem ou anexe uma imagem.")
+        return
+
+    # Coleta os anexos de imagem enviados junto ao comando
+    files = []
+    for attachment in ctx.message.attachments:
+        if attachment.content_type and attachment.content_type.startswith("image/"):
+            files.append(await attachment.to_file())
+
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound):
+        pass
+
+    await ctx.channel.send(mensagem or None, files=files if files else [])
+
+
+# ---------- buggy!falar_canal ----------
+@bot.command(name="falar_canal")
+async def buggy_falar_canal(ctx: commands.Context, canal: discord.TextChannel, *, mensagem: str = ""):
+    """[Staff] Faz o Buggy falar em um canal específico (suporta anexos de imagem)"""
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
+        return
+    if len(mensagem) > 2000:
+        await ctx.send("❌ Mensagem muito longa (máx. 2000 caracteres).")
+        return
+    if not mensagem and not ctx.message.attachments:
+        await ctx.send("❌ Envie uma mensagem ou anexe uma imagem.")
+        return
+
+    # Coleta os anexos de imagem enviados junto ao comando
+    files = []
+    for attachment in ctx.message.attachments:
+        if attachment.content_type and attachment.content_type.startswith("image/"):
+            files.append(await attachment.to_file())
+
+    await canal.send(mensagem or None, files=files if files else [])
+    await ctx.send(f"✅ Enviado em {canal.mention}!", delete_after=5)
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound):
+        pass
+
+
+# ---------- buggy!editar ----------
+@bot.command(name="editar")
+async def buggy_editar(ctx: commands.Context, message_id: str, canal: Optional[discord.TextChannel] = None, *, novo_texto: str):
+    """[Staff] Edita uma mensagem enviada pelo Buggy. Use: buggy!editar <id> [#canal] <novo texto>"""
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
+        return
+    if len(novo_texto) > 2000:
+        await ctx.send("❌ Texto muito longo (máx. 2000 caracteres).")
+        return
+    try:
+        mid = int(message_id)
+    except ValueError:
+        await ctx.send("❌ ID inválido.")
+        return
+
+    # 1) Cache (instantâneo)
+    msg = discord.utils.get(bot.cached_messages, id=mid)
+
+    # 2) Canal especificado ou atual
+    if msg is None:
+        alvo = canal or ctx.channel
+        try:
+            msg = await alvo.fetch_message(mid)
+        except (discord.NotFound, discord.Forbidden):
+            pass
+
+    # 3) Último recurso: percorre todos os canais
+    if msg is None:
+        for ch in ctx.guild.text_channels:
+            if ch == (canal or ctx.channel):
+                continue
+            try:
+                msg = await ch.fetch_message(mid)
+                break
+            except (discord.NotFound, discord.Forbidden):
+                continue
+
+    if msg is None:
+        await ctx.send("❌ Mensagem não encontrada. Tente informar o canal: `buggy!editar <id> #canal <texto>`")
+        return
+    if msg.author != bot.user:
+        await ctx.send("❌ Essa mensagem não é minha!")
+        return
+    try:
+        await msg.edit(content=novo_texto)
+        await ctx.send("✅ Editado!", delete_after=5)
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.NotFound):
+            pass
+    except discord.Forbidden:
+        await ctx.send("❌ Sem permissão para editar essa mensagem.")
+
+
+# ---------- buggy!apagar ----------
+@bot.command(name="apagar")
+async def buggy_apagar(ctx: commands.Context, message_id: str):
+    """[Staff] Apaga uma mensagem específica (do Buggy ou de qualquer pessoa)"""
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
+        return
+    try:
+        msg = await ctx.channel.fetch_message(int(message_id))
+        await msg.delete()
+        await ctx.send("✅ Apagado!", delete_after=5)
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.NotFound):
+            pass
+    except discord.NotFound:
+        await ctx.send("❌ Mensagem não encontrada.")
+    except discord.Forbidden:
+        await ctx.send("❌ Sem permissão para apagar essa mensagem.")
+    except ValueError:
+        await ctx.send("❌ ID inválido.")
+
+
+# ---------- buggy!limpar ----------
+@bot.command(name="limpar")
+async def buggy_limpar(ctx: commands.Context, quantidade: int):
+    """[Staff] Apaga as últimas N mensagens do Buggy (máx. 100)"""
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
+        return
+    if not 1 <= quantidade <= 100:
+        await ctx.send("❌ Entre 1 e 100.")
+        return
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound):
+        pass
+    deleted = await _purge_messages(ctx.channel, quantidade, lambda m: m.author == bot.user)
+    await ctx.send(f"✅ {deleted} mensagem(ns) apagada(s)!", delete_after=5)
+
+
+# ---------- buggy!limpar_tudo ----------
+@bot.command(name="limpar_tudo")
+@commands.cooldown(1, 30, commands.BucketType.channel)
+async def buggy_limpar_tudo(ctx: commands.Context):
+    """[Staff] Apaga TODAS as mensagens do Buggy no canal"""
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
+        return
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound):
+        pass
+    deleted = await _purge_messages(ctx.channel, 1000, lambda m: m.author == bot.user)
+    await ctx.send(f"✅ {deleted} mensagem(ns) apagadas!", delete_after=5)
+
+
+# ---------- Helpers de clonar_canal ----------
+
+def _resolver_canal_ou_topico(guild: discord.Guild, id_str: str):
+    """Resolve um ID para TextChannel, Thread ou ForumChannel. Retorna (objeto, tipo_str) ou (None, None)."""
+    try:
+        cid = int(id_str)
+    except (ValueError, TypeError):
+        return None, None
+
+    # TextChannel normal
+    ch = guild.get_channel(cid)
+    if isinstance(ch, discord.TextChannel):
+        return ch, "canal"
+
+    # Thread / tópico (pode estar em cache)
+    th = guild.get_thread(cid)
+    if th:
+        return th, "topico"
+
+    return None, None
+
+
+async def _fetch_canal_ou_topico(guild: discord.Guild, id_str: str):
+    """Mesmo que _resolver_canal_ou_topico, mas tenta fetch se não estiver em cache."""
+    obj, tipo = _resolver_canal_ou_topico(guild, id_str)
+    if obj:
+        return obj, tipo
+    try:
+        cid = int(id_str)
+        th = await guild.fetch_channel(cid)
+        if isinstance(th, (discord.Thread, discord.TextChannel)):
+            tipo = "topico" if isinstance(th, discord.Thread) else "canal"
+            return th, tipo
+    except Exception:
+        pass
+    return None, None
+
+
+async def _enviar_mensagem_clonada(destino, conteudo: str, arquivos: list, embeds: list):
+    """Envia conteúdo (texto + arquivos + embeds) no destino, dividindo se necessário."""
+    limite_chars = 1990
+    partes = []
+    texto = conteudo
+    if texto:
+        while texto:
+            if len(texto) <= limite_chars:
+                partes.append(texto)
+                break
+            split_at = texto.rfind(" ", 0, limite_chars)
+            if split_at == -1:
+                split_at = limite_chars
+            partes.append(texto[:split_at])
+            texto = texto[split_at:].lstrip()
+    else:
+        partes = [None]
+
+    # Primeira parte: leva arquivos e embeds
+    await destino.send(
+        content=partes[0],
+        files=arquivos if arquivos else [],
+        embeds=embeds[:10]
+    )
+    # Partes extras de texto (raramente acontece)
+    for parte in partes[1:]:
+        await asyncio.sleep(0.5)
+        await destino.send(content=parte)
+
+
+# ---------- buggy!clonar_canal ----------
+@bot.command(name="clonar_canal")
+@commands.cooldown(1, 30, commands.BucketType.guild)
+async def buggy_clonar_canal(ctx: commands.Context, id_origem: str, id_destino: str, limite: int = 100):
+    """[Staff] Copia mensagens de um canal ou tópico para outro, com imagens e anexos.
+    Uso: buggy!clonar_canal <ID_origem> <ID_destino> [limite]
+    Aceita IDs de canais de texto normais E tópicos/fóruns.
+    limite: quantidade de mensagens (padrão 100, máx. 500)."""
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
+        return
+
+    limite = max(1, min(limite, 500))
+    guild = ctx.guild
+
+    try:
+        await ctx.message.delete()
+    except (discord.Forbidden, discord.NotFound):
+        pass
+
+    # Resolve origem e destino (canal ou tópico)
+    origem, tipo_origem = await _fetch_canal_ou_topico(guild, id_origem)
+    destino, tipo_destino = await _fetch_canal_ou_topico(guild, id_destino)
+
+    if not origem:
+        await ctx.send(f"❌ Origem não encontrada. Verifique o ID `{id_origem}`.")
+        return
+    if not destino:
+        await ctx.send(f"❌ Destino não encontrada. Verifique o ID `{id_destino}`.")
+        return
+
+    nome_origem  = getattr(origem,  "name", str(id_origem))
+    nome_destino = getattr(destino, "name", str(id_destino))
+
+    aviso = await ctx.send(
+        f"⏳ Copiando até **{limite}** mensagem(ns) de **#{nome_origem}** ({tipo_origem}) "
+        f"→ **#{nome_destino}** ({tipo_destino})..."
+    )
+
+    # Coleta mensagens da mais antiga para a mais recente
+    mensagens = []
+    async for msg in origem.history(limit=limite, oldest_first=True):
+        mensagens.append(msg)
+
+    if not mensagens:
+        await aviso.edit(content=f"⚠️ Nenhuma mensagem encontrada em **#{nome_origem}**.")
+        return
+
+    enviadas = 0
+    apagadas = 0
+    erros    = 0
+
+    for msg in mensagens:
+        try:
+            conteudo = msg.content or ""
+
+            # Baixa TODOS os anexos: imagens, vídeos, docs, áudios, etc.
+            arquivos = []
+            for attachment in msg.attachments:
+                try:
+                    arquivos.append(await attachment.to_file(use_cached=True))
+                except Exception as e:
+                    print(f"[clonar_canal] Falha ao baixar anexo {attachment.filename}: {e}")
+
+            # Embeds originais (previews de link, etc.)
+            embeds_originais = [e for e in msg.embeds if e.type == "rich"]
+
+            # Mensagem vazia e sem anexo/embed — ignora
+            if not conteudo and not arquivos and not embeds_originais:
+                try:
+                    await msg.delete()
+                    apagadas += 1
+                except (discord.Forbidden, discord.NotFound):
+                    pass
+                continue
+
+            # Discord permite no máximo 10 arquivos por mensagem
+            # Se houver mais, divide em lotes
+            lotes_arquivos = [arquivos[i:i+10] for i in range(0, max(len(arquivos), 1), 10)] if arquivos else [[]]
+
+            for i, lote in enumerate(lotes_arquivos):
+                # Só envia texto e embeds no primeiro lote
+                await _enviar_mensagem_clonada(
+                    destino  = destino,
+                    conteudo = conteudo if i == 0 else None,
+                    arquivos = lote,
+                    embeds   = embeds_originais if i == 0 else []
+                )
+                if i < len(lotes_arquivos) - 1:
+                    await asyncio.sleep(0.8)
+
+            enviadas += 1
+
+            # Apaga a mensagem original após reenvio bem-sucedido
+            try:
+                await msg.delete()
+                apagadas += 1
+            except (discord.Forbidden, discord.NotFound):
+                pass
+
+            await asyncio.sleep(0.8)
+
+        except (discord.Forbidden, discord.HTTPException) as e:
+            erros += 1
+            print(f"[clonar_canal] Erro ao reenviar mensagem {msg.id}: {e}")
+
+    resultado = f"✅ **{enviadas}** mensagem(ns) copiada(s) de **#{nome_origem}** → **#{nome_destino}**."
+    if apagadas:
+        resultado += f"\n🗑️ {apagadas} mensagem(ns) original(is) apagada(s)."
+    if erros:
+        resultado += f"\n⚠️ {erros} mensagem(ns) falharam (sem permissão ou erro do Discord)."
+
+    await aviso.edit(content=resultado)
+
+
+# ---------- buggy!responder_bots ----------
+@bot.command(name="responder_bots")
+async def buggy_responder_bots(ctx: commands.Context):
+    """[Staff] Habilita o Buggy a responder mensagens de outros bots (cuidado: pode causar loop!)"""
+    global responder_a_bots
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
+        return
+    if responder_a_bots:
+        await ctx.send("ℹ️ O modo briga com bots já está **ativado**.")
+        return
+    responder_a_bots = True
+    await ctx.send(
+        "⚔️ **Modo briga com bots ATIVADO!** O grande Buggy agora vai responder a outros bots também! "
+        "Use `buggy!ignorar_bots` ou diga **\"Buggy pare\"** para desativar. 🤡"
     )
 
 
-# ---------- /buggy_falar ----------
-@bot.tree.command(name="buggy_falar", description="[Staff] Faz o Buggy enviar uma mensagem no canal atual")
-@app_commands.describe(mensagem="O que o Buggy vai dizer")
-async def buggy_falar(interaction: discord.Interaction, mensagem: str):
-    if not _staff_check(interaction):
-        await _deny_permission(interaction)
+# ---------- buggy!ignorar_bots ----------
+@bot.command(name="ignorar_bots")
+async def buggy_ignorar_bots(ctx: commands.Context):
+    """[Staff] Faz o Buggy ignorar mensagens de outros bots (padrão seguro)"""
+    global responder_a_bots
+    if not _staff_check_ctx(ctx):
+        await _deny_permission_ctx(ctx)
         return
-    if len(mensagem) > 2000:
-        await interaction.response.send_message("❌ Mensagem muito longa (máx. 2000 caracteres).", ephemeral=True)
+    if not responder_a_bots:
+        await ctx.send("ℹ️ O Buggy já está **ignorando** outros bots.")
         return
-    await interaction.response.send_message("✅ Enviado!", ephemeral=True)
-    await interaction.channel.send(mensagem)
+    responder_a_bots = False
+    await ctx.send(
+        "🔇 **Modo briga com bots DESATIVADO.** O Buggy voltará a ignorar outros bots. "
+        "Use `buggy!responder_bots` para reativar. 🤡"
+    )
 
 
-# ---------- /buggy_falar_canal ----------
-@bot.tree.command(name="buggy_falar_canal", description="[Staff] Faz o Buggy falar em um canal específico")
-@app_commands.describe(canal="Canal de destino", mensagem="O que o Buggy vai dizer")
-async def buggy_falar_canal(interaction: discord.Interaction, canal: discord.TextChannel, mensagem: str):
-    if not _staff_check(interaction):
-        await _deny_permission(interaction)
-        return
-    if len(mensagem) > 2000:
-        await interaction.response.send_message("❌ Mensagem muito longa (máx. 2000 caracteres).", ephemeral=True)
-        return
-    await canal.send(mensagem)
-    await interaction.response.send_message(f"✅ Enviado em {canal.mention}!", ephemeral=True)
 
-
-# ---------- /buggy_editar ----------
-@bot.tree.command(name="buggy_editar", description="[Staff] Edita uma mensagem enviada pelo Buggy")
-@app_commands.describe(message_id="ID da mensagem do Buggy", novo_texto="Novo conteúdo")
-async def buggy_editar(interaction: discord.Interaction, message_id: str, novo_texto: str):
-    if not _staff_check(interaction):
-        await _deny_permission(interaction)
-        return
-    if len(novo_texto) > 2000:
-        await interaction.response.send_message("❌ Texto muito longo (máx. 2000 caracteres).", ephemeral=True)
-        return
-    try:
-        msg = await interaction.channel.fetch_message(int(message_id))
-        if msg.author != bot.user:
-            await interaction.response.send_message("❌ Essa mensagem não é minha!", ephemeral=True)
-            return
-        await msg.edit(content=novo_texto)
-        await interaction.response.send_message("✅ Editado!", ephemeral=True)
-    except discord.NotFound:
-        await interaction.response.send_message("❌ Mensagem não encontrada.", ephemeral=True)
-    except ValueError:
-        await interaction.response.send_message("❌ ID inválido.", ephemeral=True)
-
-
-# ---------- /buggy_apagar ----------
-@bot.tree.command(name="buggy_apagar", description="[Staff] Apaga uma mensagem específica (do Buggy ou de qualquer pessoa)")
-@app_commands.describe(message_id="ID da mensagem para apagar")
-async def buggy_apagar(interaction: discord.Interaction, message_id: str):
-    if not _staff_check(interaction):
-        await _deny_permission(interaction)
-        return
-    try:
-        msg = await interaction.channel.fetch_message(int(message_id))
-        await msg.delete()
-        await interaction.response.send_message("✅ Apagado!", ephemeral=True)
-    except discord.NotFound:
-        await interaction.response.send_message("❌ Mensagem não encontrada.", ephemeral=True)
-    except discord.Forbidden:
-        await interaction.response.send_message("❌ Sem permissão para apagar essa mensagem.", ephemeral=True)
-    except ValueError:
-        await interaction.response.send_message("❌ ID inválido.", ephemeral=True)
-
-
-# ---------- /buggy_limpar ----------
-@bot.tree.command(name="buggy_limpar", description="[Staff] Apaga as últimas N mensagens do Buggy")
-@app_commands.describe(quantidade="Quantas mensagens apagar (máx. 100)")
-async def buggy_limpar(interaction: discord.Interaction, quantidade: int):
-    if not _staff_check(interaction):
-        await _deny_permission(interaction)
-        return
-    if not 1 <= quantidade <= 100:
-        await interaction.response.send_message("❌ Entre 1 e 100.", ephemeral=True)
-        return
-    await interaction.response.defer(ephemeral=True)
-    deleted = 0
-    async for msg in interaction.channel.history(limit=500):
-        if msg.author == bot.user:
-            await msg.delete()
-            deleted += 1
-            await asyncio.sleep(0.4)
-        if deleted >= quantidade:
-            break
-    await interaction.followup.send(f"✅ {deleted} mensagem(ns) apagada(s)!", ephemeral=True)
-
-
-# ---------- /buggy_limpar_tudo ----------
-@bot.tree.command(name="buggy_limpar_tudo", description="[Staff] Apaga TODAS as mensagens do Buggy no canal")
-async def buggy_limpar_tudo(interaction: discord.Interaction):
-    if not _staff_check(interaction):
-        await _deny_permission(interaction)
-        return
-    await interaction.response.defer(ephemeral=True)
-    deleted = 0
-    async for msg in interaction.channel.history(limit=1000):
-        if msg.author == bot.user:
-            await msg.delete()
-            deleted += 1
-            await asyncio.sleep(0.4)
-    await interaction.followup.send(f"✅ {deleted} mensagem(ns) apagadas!", ephemeral=True)
-
-
-# ---------- /buggy_ajuda ----------
-@bot.tree.command(name="buggy_ajuda", description="Lista todos os comandos do Buggy")
-async def buggy_ajuda(interaction: discord.Interaction):
-    embed = _build_full_help_embed()
-    await interaction.response.send_message(embed=embed)
-
+@bot.command(name="ajuda")
+async def buggy_ajuda(ctx: commands.Context):
+    """Lista todos os comandos do Buggy"""
+    embed = _build_full_help_embed(ctx)
+    await ctx.send(embed=embed)
 
 # ==============================================
 #  HELPERS DE EMBED
@@ -1039,7 +1340,7 @@ def _build_admin_help_embed() -> discord.Embed:
     return embed
 
 
-def _build_full_help_embed() -> discord.Embed:
+def _build_full_help_embed(ctx: commands.Context = None) -> discord.Embed:
     embed = discord.Embed(
         title="🤡 Comandos do Buggy, o Palhaço Estrela!",
         color=discord.Color.red()
@@ -1057,24 +1358,27 @@ def _build_full_help_embed() -> discord.Embed:
             "`@Buggy admin: fala no #geral que vai ter evento hoje`\n"
             "`@Buggy admin: bloqueia a categoria RPG`\n"
             "`@Buggy admin: apaga as últimas 5 mensagens do @fulano`\n"
-            "`@Buggy admin: ajuda` — lista exemplos de comandos"
+            "`@Buggy admin: ajuda` — lista exemplos de comandos\n"            "Use `buggy!ajuda` para ver todos os comandos com prefixo."
         ),
         inline=False
     )
     embed.add_field(
-        name="🔒 Slash Commands de Staff",
+        name="🔒 Comandos de Staff (buggy!)",
         value=(
-            "`/buggy_falar [mensagem]` — Buggy fala no canal atual\n"
-            "`/buggy_falar_canal [#canal] [mensagem]` — Buggy fala em outro canal\n"
-            "`/buggy_editar [id] [novo_texto]` — Edita uma msg do Buggy\n"
-            "`/buggy_apagar [id]` — Apaga qualquer mensagem pelo ID\n"
-            "`/buggy_limpar [N]` — Apaga as últimas N msgs do Buggy\n"
-            "`/buggy_limpar_tudo` — Apaga TODAS as msgs do Buggy no canal\n"
-            "`/buggy_bloquear_canal [#canal]` — Silencia a IA em um canal\n"
-            "`/buggy_desbloquear_canal [#canal]` — Reativa a IA em um canal\n"
-            "`/buggy_bloquear_categoria [cat]` — Bloqueia todos os canais de uma categoria\n"
-            "`/buggy_desbloquear_categoria [cat]` — Desbloqueia todos os canais de uma categoria\n"
-            "`/buggy_canais_bloqueados` — Lista canais silenciados"
+            "`buggy!falar [mensagem]` — Buggy fala no canal atual\n"
+            "`buggy!falar_canal [#canal] [mensagem]` — Buggy fala em outro canal\n"
+            "`buggy!editar [id] [novo_texto]` — Edita uma msg do Buggy\n"
+            "`buggy!apagar [id]` — Apaga qualquer mensagem pelo ID\n"
+            "`buggy!limpar [N]` — Apaga as últimas N msgs do Buggy\n"
+            "`buggy!limpar_tudo` — Apaga TODAS as msgs do Buggy no canal\n"
+            "`buggy!bloquear_canal [#canal]` — Silencia a IA em um canal\n"
+            "`buggy!desbloquear_canal [#canal]` — Reativa a IA em um canal\n"
+            "`buggy!bloquear_categoria [nome]` — Bloqueia todos os canais de uma categoria\n"
+            "`buggy!desbloquear_categoria [nome]` — Desbloqueia todos os canais de uma categoria\n"
+            "`buggy!canais_bloqueados` — Lista canais silenciados\n"
+            "`buggy!responder_bots` — Ativa resposta a outros bots (⚠️ risco de loop!)\n"
+            "`buggy!ignorar_bots` — Desativa resposta a outros bots (padrão seguro)\n"
+            "`buggy!clonar_canal <ID_origem> <ID_destino> [limite]` — Copia msgs de canal ou tópico para outro (use o ID)"
         ),
         inline=False
     )
@@ -1091,16 +1395,18 @@ def _build_full_help_embed() -> discord.Embed:
 #  ERROR HANDLER GLOBAL
 # ==============================================
 
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error):
-    msg = f"❌ Erro: {error}"
-    try:
-        if interaction.response.is_done():
-            await interaction.followup.send(msg, ephemeral=True)
-        else:
-            await interaction.response.send_message(msg, ephemeral=True)
-    except Exception as e:
-        print(f"Erro ao enviar mensagem de erro: {e}")
+@bot.event
+async def on_command_error(ctx: commands.Context, error):
+    if isinstance(error, commands.CommandNotFound):
+        return  # ignora comandos desconhecidos silenciosamente
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"⚠️ Faltou um argumento! Use `buggy!ajuda` para ver como usar.")
+    elif isinstance(error, commands.BadArgument):
+        await ctx.send(f"⚠️ Argumento inválido. Use `buggy!ajuda` para ver como usar.")
+    elif isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"⏳ Calma! Esse comando pode ser usado de novo em {error.retry_after:.0f}s.")
+    else:
+        print(f"[Erro] {error}")
 
 
 # ==============================================
