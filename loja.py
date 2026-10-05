@@ -214,15 +214,14 @@ class PaginaButton(ui.Button):
     async def callback(self, interaction: discord.Interaction):
         view: LojaView = self.view
         view.pagina = self.indice
-        view.montar()
-        await interaction.response.edit_message(embeds=view.embeds(), view=view)
+        await view.atualizar(interaction)
 
 
-MAX_ITENS_POR_VEZ = 5  # limite do Discord: 5 campos por janela (modal)
+MAX_ITENS_POR_VEZ = 5  # limite do Discord: 5 campos por janela (modal) — só afeta a janela de quantidades
 
 
 class AdicionarSelect(ui.Select):
-    """Menu com TODOS os itens da loja, qualquer que seja a página aberta."""
+    """Menu com TODOS os itens da loja, qualquer que seja a página aberta (sem limite de itens)."""
 
     def __init__(self):
         opcoes = [
@@ -233,15 +232,29 @@ class AdicionarSelect(ui.Select):
             for item in pagina["itens"]
         ]
         super().__init__(
-            placeholder=f"Escolha até {MAX_ITENS_POR_VEZ} itens e depois informe as quantidades",
+            placeholder="Escolha os itens que quiser comprar",
             min_values=1,
-            max_values=MAX_ITENS_POR_VEZ,
+            max_values=len(opcoes),
             options=opcoes,
             row=1,
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(QuantidadesModal(self.view, self.values))
+        view: LojaView = self.view
+        if len(self.values) <= MAX_ITENS_POR_VEZ:
+            await interaction.response.send_modal(QuantidadesModal(view, self.values))
+            return
+        # Mais de 5 itens não cabem numa janela do Discord: entram com 1 unidade
+        # e as quantidades são ajustadas depois pelo menu do carrinho.
+        for key in self.values:
+            view.carrinho.setdefault(key, 1)
+        await view.atualizar(
+            interaction,
+            aviso=(
+                f"ℹ️ {len(self.values)} itens adicionados com **1 unidade** cada. "
+                "Para mudar as quantidades, use o menu do carrinho (até 5 itens por vez)."
+            ),
+        )
 
 
 class QuantidadeSelect(ui.Select):
@@ -252,7 +265,13 @@ class QuantidadeSelect(ui.Select):
             discord.SelectOption(label=f"{q}x {ITENS[k]['nome']}", value=k, description="Alterar quantidade ou remover")
             for k, q in carrinho.items()
         ]
-        super().__init__(placeholder="Alterar quantidade / remover item do carrinho", options=opcoes, row=2)
+        super().__init__(
+            placeholder="Alterar quantidade / remover do carrinho (até 5 por vez)",
+            min_values=1,
+            max_values=min(MAX_ITENS_POR_VEZ, len(opcoes)),
+            options=opcoes,
+            row=2,
+        )
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(QuantidadesModal(self.view, self.values))
@@ -289,8 +308,7 @@ class QuantidadesModal(ui.Modal):
                 self.loja_view.carrinho[key] = qtd
             else:
                 self.loja_view.carrinho.pop(key, None)
-        self.loja_view.montar()
-        await interaction.response.edit_message(embeds=self.loja_view.embeds(), view=self.loja_view)
+        await self.loja_view.atualizar(interaction)
 
 
 class FinalizarButton(ui.Button):
@@ -309,8 +327,7 @@ class LimparButton(ui.Button):
     async def callback(self, interaction: discord.Interaction):
         view: LojaView = self.view
         view.carrinho.clear()
-        view.montar()
-        await interaction.response.edit_message(embeds=view.embeds(), view=view)
+        await view.atualizar(interaction)
 
 
 class LojaView(ui.View):
@@ -322,6 +339,11 @@ class LojaView(ui.View):
         self.carrinho: dict[str, int] = {}
         self.finalizando = False
         self.montar()
+
+    async def atualizar(self, interaction: discord.Interaction, aviso: Optional[str] = None):
+        """Redesenha a loja na mensagem atual; `aviso` aparece acima dos embeds (None limpa)."""
+        self.montar()
+        await interaction.response.edit_message(content=aviso, embeds=self.embeds(), view=self)
 
     def montar(self):
         self.clear_items()
