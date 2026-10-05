@@ -38,8 +38,6 @@ MAX_QTD_POR_ITEM = 10
 # preco em centavos. Os textos aparecem exatamente como serão exibidos no Discord.
 PAGINAS = [
     {
-        "nome": "Apoio ao Servidor",
-        "emoji": "🔷",
         "descricao": """# __APOIO AO SERVIDOR__ <:berry:1222990525372563539>
 Caso o jogador quiser, ele pode apoiar nosso servidor e nos ajudar a crescer! Ao apoiar, nos ajudando em sua manutenção, poderá ter acesso a recompensas e benefícios exclusivos para vocês e **intransferíveis**! Por enquanto, essas são nossas opções... Fiquem atentos que mais virão!
 **Qualquer aquisição e utilização de algum VIP deverá alertar a <@&1222232432527413389> previamente no ticket criado em <#1463579296130928650>**
@@ -74,8 +72,6 @@ Para aqueles que já utilizaram seu renascimento grátis e desejam realizar muda
         ],
     },
     {
-        "nome": "Exploração",
-        "emoji": "🧭",
         "descricao": """## 🔷 MANOBRA DE EMERGÊNCIA - R$5.00
 Pode ser usado após falhar no teste de navegação para garantir um sucesso automático.
 
@@ -105,8 +101,6 @@ Pode rolar novamente __**o dado de tesouro do arqueólogo depois de acharem a ru
         ],
     },
     {
-        "nome": "Ofício e Extras",
-        "emoji": "🛠️",
         "descricao": """## 🔷 Token de Segunda Chance 5 R$
 Permite que, quando realizar um teste de ofício seja possível repetir o teste imediatamente ao invés de esperar o cooldown.
 ⚠️ **Um uso por teste.**
@@ -211,10 +205,8 @@ class PainelLojaView(ui.View):
 # =============================================
 class PaginaButton(ui.Button):
     def __init__(self, indice: int, ativa: bool):
-        pagina = PAGINAS[indice]
         super().__init__(
-            label=pagina["nome"],
-            emoji=pagina["emoji"],
+            label=f"Página {indice + 1}",
             style=discord.ButtonStyle.primary if ativa else discord.ButtonStyle.secondary,
             row=0,
         )
@@ -227,29 +219,35 @@ class PaginaButton(ui.Button):
         await interaction.response.edit_message(embeds=view.embeds(), view=view)
 
 
+MAX_ITENS_POR_VEZ = 5  # limite do Discord: 5 campos por janela (modal)
+
+
 class AdicionarSelect(ui.Select):
-    def __init__(self, pagina: int):
+    """Menu com TODOS os itens da loja, qualquer que seja a página aberta."""
+
+    def __init__(self):
         opcoes = [
-            discord.SelectOption(label=i["nome"], value=i["key"], description=brl(i["preco"]))
-            for i in PAGINAS[pagina]["itens"]
+            discord.SelectOption(
+                label=item["nome"], value=item["key"], description=f"{brl(item['preco'])} — Página {n}"
+            )
+            for n, pagina in enumerate(PAGINAS, start=1)
+            for item in pagina["itens"]
         ]
         super().__init__(
-            placeholder="Escolha itens para adicionar ao carrinho (+1 cada)",
+            placeholder=f"Escolha até {MAX_ITENS_POR_VEZ} itens e depois informe as quantidades",
             min_values=1,
-            max_values=len(opcoes),
+            max_values=MAX_ITENS_POR_VEZ,
             options=opcoes,
             row=1,
         )
 
     async def callback(self, interaction: discord.Interaction):
-        view: LojaView = self.view
-        for key in self.values:
-            view.carrinho[key] = min(view.carrinho.get(key, 0) + 1, MAX_QTD_POR_ITEM)
-        view.montar()
-        await interaction.response.edit_message(embeds=view.embeds(), view=view)
+        await interaction.response.send_modal(QuantidadesModal(self.view, self.values))
 
 
 class QuantidadeSelect(ui.Select):
+    """Menu do carrinho: reabre a janela de quantidades do item escolhido."""
+
     def __init__(self, carrinho: dict[str, int]):
         opcoes = [
             discord.SelectOption(label=f"{q}x {ITENS[k]['nome']}", value=k, description="Alterar quantidade ou remover")
@@ -258,33 +256,40 @@ class QuantidadeSelect(ui.Select):
         super().__init__(placeholder="Alterar quantidade / remover item do carrinho", options=opcoes, row=2)
 
     async def callback(self, interaction: discord.Interaction):
-        view: LojaView = self.view
-        await interaction.response.send_modal(QuantidadeModal(view, self.values[0]))
+        await interaction.response.send_modal(QuantidadesModal(self.view, self.values))
 
 
-class QuantidadeModal(ui.Modal):
-    def __init__(self, view: "LojaView", key: str):
-        super().__init__(title=f"Quantidade — {ITENS[key]['nome']}"[:45])
+class QuantidadesModal(ui.Modal):
+    """Janela com um campo de quantidade para cada item escolhido (0 remove do carrinho)."""
+
+    def __init__(self, view: "LojaView", keys: list[str]):
+        super().__init__(title=f"Quantidades (0 remove, máx. {MAX_QTD_POR_ITEM})")
         self.loja_view = view
-        self.key = key
-        self.quantidade = ui.TextInput(
-            label=f"Quantidade (0 remove, máx. {MAX_QTD_POR_ITEM})",
-            default=str(view.carrinho.get(key, 1)),
-            max_length=2,
-        )
-        self.add_item(self.quantidade)
+        self.campos: dict[str, ui.TextInput] = {}
+        for key in keys:
+            campo = ui.TextInput(
+                label=ITENS[key]["nome"][:45],
+                default=str(view.carrinho.get(key, 1)),
+                max_length=2,
+            )
+            self.campos[key] = campo
+            self.add_item(campo)
 
     async def on_submit(self, interaction: discord.Interaction):
-        try:
-            qtd = int(self.quantidade.value.strip())
-        except ValueError:
-            await interaction.response.send_message("⚠️ Digite apenas um número.", ephemeral=True)
-            return
-        qtd = max(0, min(qtd, MAX_QTD_POR_ITEM))
-        if qtd:
-            self.loja_view.carrinho[self.key] = qtd
-        else:
-            self.loja_view.carrinho.pop(self.key, None)
+        novas: dict[str, int] = {}
+        for key, campo in self.campos.items():
+            try:
+                novas[key] = max(0, min(int(campo.value.strip()), MAX_QTD_POR_ITEM))
+            except ValueError:
+                await interaction.response.send_message(
+                    f"⚠️ Quantidade inválida em **{ITENS[key]['nome']}**. Digite apenas números.", ephemeral=True
+                )
+                return
+        for key, qtd in novas.items():
+            if qtd:
+                self.loja_view.carrinho[key] = qtd
+            else:
+                self.loja_view.carrinho.pop(key, None)
         self.loja_view.montar()
         await interaction.response.edit_message(embeds=self.loja_view.embeds(), view=self.loja_view)
 
@@ -323,7 +328,7 @@ class LojaView(ui.View):
         self.clear_items()
         for i in range(len(PAGINAS)):
             self.add_item(PaginaButton(i, ativa=i == self.pagina))
-        self.add_item(AdicionarSelect(self.pagina))
+        self.add_item(AdicionarSelect())
         if self.carrinho:
             self.add_item(QuantidadeSelect(self.carrinho))
         self.add_item(FinalizarButton(desativado=not self.carrinho))
@@ -332,14 +337,14 @@ class LojaView(ui.View):
     def embeds(self) -> list[discord.Embed]:
         pagina = PAGINAS[self.pagina]
         catalogo = discord.Embed(description=pagina["descricao"], color=discord.Color.blue())
-        catalogo.set_footer(text=f"Página {self.pagina + 1}/{len(PAGINAS)} — {pagina['nome']}")
+        catalogo.set_footer(text=f"Página {self.pagina + 1}/{len(PAGINAS)}")
 
         carrinho = discord.Embed(title="🛒 Seu carrinho", color=discord.Color.green())
         if self.carrinho:
             carrinho.description = linhas_carrinho(self.carrinho)
             carrinho.set_footer(text=f"Total: {brl(total_carrinho(self.carrinho))}")
         else:
-            carrinho.description = "Vazio. Escolha itens no menu abaixo."
+            carrinho.description = "Vazio. Escolha itens no menu abaixo e informe as quantidades."
         return [catalogo, carrinho]
 
 
