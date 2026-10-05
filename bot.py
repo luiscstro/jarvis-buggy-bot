@@ -9,6 +9,7 @@ import re
 from typing import Optional
 from dotenv import load_dotenv
 load_dotenv()
+from loja import setup_loja
 
 # =============================================
 #  CONFIGURAÇÕES — edite antes de rodar
@@ -698,6 +699,11 @@ async def executar_acao_admin(message: discord.Message, instrucao: str):
 # ==============================================
 
 @bot.event
+async def setup_hook():
+    await setup_loja(bot, STAFF_ROLES)
+
+
+@bot.event
 async def on_ready():
     print(f"🤡 Buggy o Palhaço Estrela está online! Bot: {bot.user}")
     bot.tree.clear_commands(guild=None)
@@ -1378,7 +1384,8 @@ def _build_full_help_embed(ctx: commands.Context = None) -> discord.Embed:
             "`buggy!canais_bloqueados` — Lista canais silenciados\n"
             "`buggy!responder_bots` — Ativa resposta a outros bots (⚠️ risco de loop!)\n"
             "`buggy!ignorar_bots` — Desativa resposta a outros bots (padrão seguro)\n"
-            "`buggy!clonar_canal <ID_origem> <ID_destino> [limite]` — Copia msgs de canal ou tópico para outro (use o ID)"
+            "`buggy!clonar_canal <ID_origem> <ID_destino> [limite]` — Copia msgs de canal ou tópico para outro (use o ID)\n"
+            "`buggy!loja_painel [#canal]` — Posta o painel da loja (botão \"Abrir loja\")"
         ),
         inline=False
     )

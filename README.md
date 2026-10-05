@@ -103,6 +103,21 @@ Para entrar no **modo admin**, use o prefixo `admin:` após a menção:
 
 ---
 
+## 🛒 Loja Virtual
+
+1. Staff usa `buggy!loja_painel` (ou `buggy!loja_painel #canal`) para postar o painel com o botão **Abrir loja**.
+2. O jogador clica, escolhe os itens e as quantidades (carrinho com total) e finaliza.
+3. O bot cria um canal privado `<nick>-<id da compra>` (ex.: `percy-01`) com o jogador, o bot e a staff, com o resumo e o total.
+4. A staff usa o botão **Fechar compra** no canal para encerrar (o canal é apagado).
+
+Configuração (opcional, no `.env`):
+- `LOJA_CATEGORIA_ID` — categoria onde os canais de compra são criados.
+- `LOJA_CARGO_ALERTA_ID` — cargo avisado em toda compra (padrão: o cargo citado no texto da loja).
+
+O bot precisa da permissão **Gerenciar Canais**. Os itens e preços ficam em `loja.py` (`PAGINAS`). O contador de compras fica em `store_data.json`.
+
+---
+
 ## 🌐 Rodar 24/7 (Opcional)
 
 Para manter o bot sempre online, você pode usar:
