@@ -30,7 +30,6 @@ LOJA_CATEGORIA_ID = int(os.getenv("LOJA_CATEGORIA_ID", "0") or 0)
 LOJA_CARGO_ALERTA_ID = int(os.getenv("LOJA_CARGO_ALERTA_ID", "1222232432527413389") or 0)
 
 LOJA_ARQUIVO = "store_data.json"
-MAX_QTD_POR_ITEM = 10
 
 # =============================================
 #  CATÁLOGO
@@ -263,14 +262,14 @@ class QuantidadesModal(ui.Modal):
     """Janela com um campo de quantidade para cada item escolhido (0 remove do carrinho)."""
 
     def __init__(self, view: "LojaView", keys: list[str]):
-        super().__init__(title=f"Quantidades (0 remove, máx. {MAX_QTD_POR_ITEM})")
+        super().__init__(title="Quantidades (0 remove o item)")
         self.loja_view = view
         self.campos: dict[str, ui.TextInput] = {}
         for key in keys:
             campo = ui.TextInput(
                 label=ITENS[key]["nome"][:45],
                 default=str(view.carrinho.get(key, 1)),
-                max_length=2,
+                max_length=5,
             )
             self.campos[key] = campo
             self.add_item(campo)
@@ -279,7 +278,7 @@ class QuantidadesModal(ui.Modal):
         novas: dict[str, int] = {}
         for key, campo in self.campos.items():
             try:
-                novas[key] = max(0, min(int(campo.value.strip()), MAX_QTD_POR_ITEM))
+                novas[key] = max(0, int(campo.value.strip()))
             except ValueError:
                 await interaction.response.send_message(
                     f"⚠️ Quantidade inválida em **{ITENS[key]['nome']}**. Digite apenas números.", ephemeral=True
