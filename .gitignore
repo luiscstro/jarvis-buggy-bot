@@ -1,1 +1,33 @@
+# Segredos e configuração local
 .env
+.env.*
+!.env.example
+
+# Credenciais (ex.: service account do Google)
+bot-discord-*.json
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Ambientes virtuais
+venv/
+.venv/
+env/
+
+# Editor
+.vscode/
+.idea/
+
+# Dados de runtime da loja (pedidos com dados dos jogadores)
+store_data.json
+store_data.json.tmp
+
+# Logs e temporários
+*.log
+*.tmp
+
+# Outros bots/scripts que não fazem parte do Buggy
+modelo.py
+ajuda.py
+LEIA_ME.md

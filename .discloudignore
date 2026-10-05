@@ -1,0 +1,29 @@
+# Arquivos que NÃO são enviados no deploy da Discloud (mesma sintaxe do .gitignore)
+# ATENÇÃO: o .env NÃO está aqui de propósito — o bot lê o token e as chaves dele.
+
+# Controle de versão e editor
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Ambientes virtuais
+venv/
+.venv/
+env/
+
+# Outros bots/scripts que não fazem parte do Buggy
+modelo.py
+ajuda.py
+
+# Documentação
+README.md
+LEIA_ME.md
+
+# Arquivos temporários e logs
+*.log
+*.tmp
