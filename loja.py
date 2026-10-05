@@ -38,8 +38,6 @@ MAX_QTD_POR_ITEM = 10
 # preco em centavos. Os textos aparecem exatamente como serão exibidos no Discord.
 PAGINAS = [
     {
-        "nome": "Apoio ao Servidor",
-        "emoji": "🔷",
         "descricao": """# __APOIO AO SERVIDOR__ <:berry:1222990525372563539>
 Caso o jogador quiser, ele pode apoiar nosso servidor e nos ajudar a crescer! Ao apoiar, nos ajudando em sua manutenção, poderá ter acesso a recompensas e benefícios exclusivos para vocês e **intransferíveis**! Por enquanto, essas são nossas opções... Fiquem atentos que mais virão!
 **Qualquer aquisição e utilização de algum VIP deverá alertar a <@&1222232432527413389> previamente no ticket criado em <#1463579296130928650>**
@@ -74,8 +72,6 @@ Para aqueles que já utilizaram seu renascimento grátis e desejam realizar muda
         ],
     },
     {
-        "nome": "Exploração",
-        "emoji": "🧭",
         "descricao": """## 🔷 MANOBRA DE EMERGÊNCIA - R$5.00
 Pode ser usado após falhar no teste de navegação para garantir um sucesso automático.
 
@@ -105,8 +101,6 @@ Pode rolar novamente __**o dado de tesouro do arqueólogo depois de acharem a ru
         ],
     },
     {
-        "nome": "Ofício e Extras",
-        "emoji": "🛠️",
         "descricao": """## 🔷 Token de Segunda Chance 5 R$
 Permite que, quando realizar um teste de ofício seja possível repetir o teste imediatamente ao invés de esperar o cooldown.
 ⚠️ **Um uso por teste.**
@@ -211,10 +205,8 @@ class PainelLojaView(ui.View):
 # =============================================
 class PaginaButton(ui.Button):
     def __init__(self, indice: int, ativa: bool):
-        pagina = PAGINAS[indice]
         super().__init__(
-            label=pagina["nome"],
-            emoji=pagina["emoji"],
+            label=f"Página {indice + 1}",
             style=discord.ButtonStyle.primary if ativa else discord.ButtonStyle.secondary,
             row=0,
         )
@@ -332,7 +324,7 @@ class LojaView(ui.View):
     def embeds(self) -> list[discord.Embed]:
         pagina = PAGINAS[self.pagina]
         catalogo = discord.Embed(description=pagina["descricao"], color=discord.Color.blue())
-        catalogo.set_footer(text=f"Página {self.pagina + 1}/{len(PAGINAS)} — {pagina['nome']}")
+        catalogo.set_footer(text=f"Página {self.pagina + 1}/{len(PAGINAS)}")
 
         carrinho = discord.Embed(title="🛒 Seu carrinho", color=discord.Color.green())
         if self.carrinho:
