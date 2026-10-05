@@ -6,18 +6,25 @@ Fluxo:
      e as quantidades, vendo o carrinho e o total.
   3. Ao finalizar, o bot cria um canal privado "<nick>-<id da compra>"
      (ex.: percy-01) visível só para o jogador, o bot e a staff, com o resumo
-     do pedido e o total a pagar.
+     do pedido, o total a pagar e o PIX (copia e cola + QR Code) já com o valor.
+  4. A staff marca a compra como paga/entregue no próprio canal e acompanha tudo
+     no painel ao vivo (`buggy!loja_dashboard`).
 """
 import asyncio
+import csv
+import io
 import json
 import os
 import re
 import unicodedata
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import discord
 from discord import ui
 from discord.ext import commands
+
+import pix
 
 # =============================================
 #  CONFIGURAÇÕES
@@ -30,6 +37,24 @@ LOJA_CATEGORIA_ID = int(os.getenv("LOJA_CATEGORIA_ID", "0") or 0)
 LOJA_CARGO_ALERTA_ID = int(os.getenv("LOJA_CARGO_ALERTA_ID", "1222232432527413389") or 0)
 
 LOJA_ARQUIVO = "store_data.json"
+
+# PIX copia e cola da conta que recebe os pagamentos (guarde no .env, nunca no código).
+# O bot embute o valor de cada compra e gera o QR Code a partir dele.
+PIX_COPIA_COLA = (os.getenv("PIX_COPIA_COLA") or "").strip()
+if PIX_COPIA_COLA and not pix.payload_valido(PIX_COPIA_COLA):
+    print("[Loja] PIX_COPIA_COLA inválido (o CRC não confere). PIX desativado.")
+    PIX_COPIA_COLA = ""
+
+FUSO_BRASILIA = timezone(timedelta(hours=-3))
+
+STATUS = {
+    "aguardando_pagamento": "🟡 Aguardando pagamento",
+    "paga": "💰 Paga — a entregar",
+    "entregue": "📦 Entregue",
+    "cancelada": "❌ Cancelada",
+}
+STATUS_CONFIRMADOS = ("paga", "entregue")  # entram no faturamento
+COMPRAS_POR_PAGINA = 5
 
 # =============================================
 #  CATÁLOGO
@@ -163,15 +188,37 @@ def linhas_carrinho(carrinho: dict[str, int]) -> str:
     )
 
 
+def agora_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def epoch(iso: str) -> int:
+    return int(datetime.fromisoformat(iso).timestamp())
+
+
+def data_brasilia(iso: Optional[str]) -> str:
+    return datetime.fromisoformat(iso).astimezone(FUSO_BRASILIA).strftime("%d/%m/%Y %H:%M:%S") if iso else ""
+
+
+def itens_texto(itens: dict[str, int]) -> str:
+    return ", ".join(f"{q}x {ITENS.get(k, {'nome': k})['nome']}" for k, q in itens.items())
+
+
 class Armazenamento:
     """Contador de compras e histórico de pedidos, persistidos em JSON."""
 
     def __init__(self, caminho: str):
         self.caminho = caminho
-        self.dados = {"ultimo_id": 0, "pedidos": {}}
+        self.dados = {"ultimo_id": 0, "pedidos": {}, "dashboard": None}
         if os.path.exists(caminho):
             with open(caminho, "r", encoding="utf-8") as f:
                 self.dados.update(json.load(f))
+
+    def _salvar(self):
+        tmp = self.caminho + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(self.dados, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, self.caminho)
 
     def proximo_id(self) -> int:
         return self.dados["ultimo_id"] + 1
@@ -179,10 +226,101 @@ class Armazenamento:
     def registrar(self, compra_id: int, pedido: dict):
         self.dados["ultimo_id"] = compra_id
         self.dados["pedidos"][f"{compra_id:02d}"] = pedido
-        tmp = self.caminho + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self.dados, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, self.caminho)
+        self._salvar()
+
+    def atualizar(self, chave: str, **campos):
+        self.dados["pedidos"][chave].update(campos)
+        self._salvar()
+
+    def por_canal(self, canal_id: int) -> Optional[tuple[str, dict]]:
+        for chave, pedido in self.dados["pedidos"].items():
+            if pedido.get("canal_id") == canal_id:
+                return chave, pedido
+        return None
+
+    def todos(self) -> list[dict]:
+        """Todos os pedidos, do mais recente para o mais antigo."""
+        return [self.dados["pedidos"][c] for c in sorted(self.dados["pedidos"], key=int, reverse=True)]
+
+    def definir_dashboard(self, canal_id: Optional[int], mensagem_id: Optional[int] = None):
+        """Guarda onde está o painel ao vivo (None, None esquece o painel)."""
+        self.dados["dashboard"] = {"canal_id": canal_id, "mensagem_id": mensagem_id} if canal_id else None
+        self._salvar()
+
+
+# =============================================
+#  DASHBOARD — funções puras (embed e CSV)
+# =============================================
+def resumo_compras(pedidos: list[dict]) -> dict[str, tuple[int, int]]:
+    """{status: (quantidade, valor em centavos)} para cada status."""
+    resumo = {st: (0, 0) for st in STATUS}
+    for p in pedidos:
+        qtd, valor = resumo.get(p["status"], (0, 0))
+        resumo[p["status"]] = (qtd + 1, valor + p["total_centavos"])
+    return resumo
+
+
+def bloco_compra(p: dict) -> str:
+    ts = epoch(p["criado_em"])
+    canal = " · 🔒 canal fechado" if p.get("fechado_em") else f" · <#{p['canal_id']}>"
+    nome = discord.utils.escape_markdown(p.get("nome") or p["usuario"])
+    itens = itens_texto(p["itens"])
+    if len(itens) > 300:
+        itens = itens[:297] + "..."
+    return (
+        f"**#{p['id']:02d}** · <t:{ts}:d> às <t:{ts}:t> · {STATUS.get(p['status'], p['status'])}\n"
+        f"👤 **{nome}** (`{p['usuario']}`) · ID `{p['usuario_id']}` · <@{p['usuario_id']}>\n"
+        f"🛍️ {itens}\n"
+        f"💵 **{brl(p['total_centavos'])}**{canal}"
+    )
+
+
+def embed_dashboard(pedidos: list[dict], pagina: int) -> tuple[discord.Embed, int, int]:
+    """Monta o painel. Devolve (embed, total de páginas, página efetiva)."""
+    total_paginas = max(1, -(-len(pedidos) // COMPRAS_POR_PAGINA))
+    pagina = max(0, min(pagina, total_paginas - 1))
+    fatia = pedidos[pagina * COMPRAS_POR_PAGINA:(pagina + 1) * COMPRAS_POR_PAGINA]
+
+    resumo = resumo_compras(pedidos)
+    faturamento = sum(resumo[st][1] for st in STATUS_CONFIRMADOS)
+    embed = discord.Embed(
+        title="📊 Painel de Compras",
+        description="\n\n".join(bloco_compra(p) for p in fatia) or "Nenhuma compra registrada ainda.",
+        color=discord.Color.orange(),
+    )
+    embed.add_field(name="🧾 Compras", value=str(len(pedidos)), inline=True)
+    embed.add_field(name="💵 Faturamento confirmado", value=brl(faturamento), inline=True)
+    for st in STATUS:
+        qtd, valor = resumo[st]
+        embed.add_field(name=STATUS[st], value=f"{qtd} — {brl(valor)}", inline=True)
+    embed.set_footer(text=f"Página {pagina + 1}/{total_paginas} · atualizado ao vivo")
+    embed.timestamp = discord.utils.utcnow()
+    return embed, total_paginas, pagina
+
+
+def _csv_seguro(valor) -> str:
+    """Evita que o Excel execute fórmulas vindas de nicks (ex.: '=CMD(...)')."""
+    texto = str(valor)
+    return "'" + texto if texto[:1] in ("=", "+", "-", "@", "\t", "\r") else texto
+
+
+def csv_compras(pedidos: list[dict]) -> bytes:
+    """CSV (separador ';', UTF-8 com BOM, abre direto no Excel) com todas as compras."""
+    saida = io.StringIO()
+    escritor = csv.writer(saida, delimiter=";")
+    escritor.writerow([
+        "ID da compra", "Data/hora (Brasília)", "Nome", "Usuário", "ID do usuário", "Itens",
+        "Total (R$)", "Status", "Pago em", "Entregue em", "Fechado em", "Atualizado por", "ID do canal",
+    ])
+    for p in reversed(pedidos):  # do mais antigo para o mais recente
+        escritor.writerow([
+            f"{p['id']:02d}", data_brasilia(p["criado_em"]), _csv_seguro(p.get("nome") or ""),
+            _csv_seguro(p["usuario"]), p["usuario_id"], _csv_seguro(itens_texto(p["itens"])),
+            f"{p['total_centavos'] // 100},{p['total_centavos'] % 100:02d}", STATUS.get(p["status"], p["status"]),
+            data_brasilia(p.get("pago_em")), data_brasilia(p.get("entregue_em")), data_brasilia(p.get("fechado_em")),
+            _csv_seguro(p.get("atualizado_por") or ""), p["canal_id"],
+        ])
+    return ("\ufeff" + saida.getvalue()).encode("utf-8")
 
 
 # =============================================
@@ -373,21 +511,69 @@ class LojaView(ui.View):
 #  CANAL DE COMPRA
 # =============================================
 class CompraView(ui.View):
+    """Botões da staff dentro do canal da compra."""
+
     def __init__(self, cog: "LojaCog"):
         super().__init__(timeout=None)
         self.cog = cog
 
-    @ui.button(label="Fechar compra", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="loja:fechar")
+    @ui.button(label="Marcar como pago", emoji="💰", style=discord.ButtonStyle.success, custom_id="loja:pago", row=0)
+    async def pago(self, interaction: discord.Interaction, button: ui.Button):
+        await self.cog.mudar_status(interaction, "paga")
+
+    @ui.button(label="Marcar como entregue", emoji="📦", style=discord.ButtonStyle.primary, custom_id="loja:entregue", row=0)
+    async def entregue(self, interaction: discord.Interaction, button: ui.Button):
+        await self.cog.mudar_status(interaction, "entregue")
+
+    @ui.button(label="Fechar compra", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="loja:fechar", row=0)
     async def fechar(self, interaction: discord.Interaction, button: ui.Button):
-        if not self.cog.eh_staff(interaction.user):
-            await interaction.response.send_message("⛔ Só a staff pode fechar a compra.", ephemeral=True)
+        await self.cog.fechar_compra(interaction)
+
+
+# =============================================
+#  DASHBOARD AO VIVO (mensagem fixa no canal da staff)
+# =============================================
+class DashboardView(ui.View):
+    def __init__(self, cog: "LojaCog", pagina: int = 0, total_paginas: int = 1):
+        super().__init__(timeout=None)
+        self.cog = cog
+        self.anterior.disabled = pagina <= 0
+        self.proxima.disabled = pagina >= total_paginas - 1
+
+    async def _checar_staff(self, interaction: discord.Interaction) -> bool:
+        if self.cog.eh_staff(interaction.user):
+            return True
+        await interaction.response.send_message("⛔ Só a staff pode usar o painel.", ephemeral=True)
+        return False
+
+    @ui.button(emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="loja:dash:anterior")
+    async def anterior(self, interaction: discord.Interaction, button: ui.Button):
+        if await self._checar_staff(interaction):
+            self.cog.dash_pagina -= 1
+            await self.cog.redesenhar_dashboard(interaction)
+
+    @ui.button(emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="loja:dash:proxima")
+    async def proxima(self, interaction: discord.Interaction, button: ui.Button):
+        if await self._checar_staff(interaction):
+            self.cog.dash_pagina += 1
+            await self.cog.redesenhar_dashboard(interaction)
+
+    @ui.button(label="Atualizar", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="loja:dash:atualizar")
+    async def atualizar(self, interaction: discord.Interaction, button: ui.Button):
+        if await self._checar_staff(interaction):
+            await self.cog.redesenhar_dashboard(interaction)
+
+    @ui.button(label="Exportar CSV", emoji="📥", style=discord.ButtonStyle.primary, custom_id="loja:dash:csv")
+    async def exportar(self, interaction: discord.Interaction, button: ui.Button):
+        if not await self._checar_staff(interaction):
             return
-        await interaction.response.send_message("🔒 Compra encerrada. Este canal será apagado em 5 segundos...")
-        await asyncio.sleep(5)
-        try:
-            await interaction.channel.delete(reason=f"Compra encerrada por {interaction.user}")
-        except discord.HTTPException:
-            pass
+        pedidos = self.cog.armazenamento.todos()
+        nome = f"compras_{datetime.now(FUSO_BRASILIA):%Y-%m-%d_%H-%M}.csv"
+        await interaction.response.send_message(
+            f"📥 {len(pedidos)} compra(s) exportada(s).",
+            file=discord.File(io.BytesIO(csv_compras(pedidos)), filename=nome),
+            ephemeral=True,
+        )
 
 
 # =============================================
@@ -399,10 +585,16 @@ class LojaCog(commands.Cog):
         self.staff_roles = staff_roles
         self.armazenamento = Armazenamento(LOJA_ARQUIVO)
         self.lock = asyncio.Lock()
+        self.dash_pagina = 0
 
     async def cog_load(self):
         self.bot.add_view(PainelLojaView(self))
         self.bot.add_view(CompraView(self))
+        self.bot.add_view(DashboardView(self))
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        await self.atualizar_dashboard()  # reflete o estado atual logo que o bot sobe
 
     def eh_staff(self, membro: discord.abc.User) -> bool:
         return isinstance(membro, discord.Member) and any(r.name in self.staff_roles for r in membro.roles)
@@ -424,6 +616,115 @@ class LojaCog(commands.Cog):
         try:
             await ctx.message.delete()
         except (discord.Forbidden, discord.NotFound):
+            pass
+
+    # ---------- buggy!loja_dashboard ----------
+    @commands.command(name="loja_dashboard")
+    async def loja_dashboard(self, ctx: commands.Context, canal: Optional[discord.TextChannel] = None):
+        """[Staff] Posta o painel de compras ao vivo no canal atual (ou no informado)."""
+        if not self.eh_staff(ctx.author):
+            await ctx.send("⛔ Sem permissão, tripulante!")
+            return
+        destino = canal or ctx.channel
+        antigo = self.armazenamento.dados.get("dashboard")
+        if antigo:  # só existe um painel ao vivo por vez
+            try:
+                canal_antigo = self.bot.get_channel(antigo["canal_id"]) or await self.bot.fetch_channel(antigo["canal_id"])
+                await (await canal_antigo.fetch_message(antigo["mensagem_id"])).delete()
+            except discord.DiscordException:
+                pass
+        embed, total, pagina = embed_dashboard(self.armazenamento.todos(), 0)
+        self.dash_pagina = pagina
+        mensagem = await destino.send(embed=embed, view=DashboardView(self, pagina, total))
+        self.armazenamento.definir_dashboard(destino.id, mensagem.id)
+        try:
+            await ctx.message.delete()
+        except (discord.Forbidden, discord.NotFound):
+            pass
+
+    async def atualizar_dashboard(self):
+        """Reedita o painel ao vivo. Nunca levanta erro: o painel não pode quebrar uma compra."""
+        config = self.armazenamento.dados.get("dashboard")
+        if not config:
+            return
+        try:
+            canal = self.bot.get_channel(config["canal_id"]) or await self.bot.fetch_channel(config["canal_id"])
+            mensagem = await canal.fetch_message(config["mensagem_id"])
+            embed, total, pagina = embed_dashboard(self.armazenamento.todos(), self.dash_pagina)
+            self.dash_pagina = pagina
+            await mensagem.edit(embed=embed, view=DashboardView(self, pagina, total))
+        except discord.NotFound:
+            print("[Loja] A mensagem do painel foi apagada; use buggy!loja_dashboard para criar outro.")
+            self.armazenamento.definir_dashboard(None)
+        except discord.DiscordException as e:
+            print(f"[Loja] Não consegui atualizar o painel de compras: {e}")
+
+    async def redesenhar_dashboard(self, interaction: discord.Interaction):
+        embed, total, pagina = embed_dashboard(self.armazenamento.todos(), self.dash_pagina)
+        self.dash_pagina = pagina
+        await interaction.response.edit_message(embed=embed, view=DashboardView(self, pagina, total))
+
+    # ---------- status da compra (botões da staff) ----------
+    async def _compra_do_canal(self, interaction: discord.Interaction):
+        """Valida a staff e acha a compra do canal. Devolve (chave, pedido) ou None (já respondeu)."""
+        if not self.eh_staff(interaction.user):
+            await interaction.response.send_message("⛔ Só a staff pode fazer isso.", ephemeral=True)
+            return None
+        achado = self.armazenamento.por_canal(interaction.channel.id)
+        if not achado:
+            await interaction.response.send_message("⚠️ Não encontrei os dados desta compra no registro.", ephemeral=True)
+        return achado
+
+    async def mudar_status(self, interaction: discord.Interaction, novo: str):
+        achado = await self._compra_do_canal(interaction)
+        if not achado:
+            return
+        chave, pedido = achado
+        atual = pedido["status"]
+        autor = f"{interaction.user} ({interaction.user.id})"
+
+        if novo == "paga":
+            if atual != "aguardando_pagamento":
+                await interaction.response.send_message(f"ℹ️ Esta compra já está: **{STATUS[atual]}**.", ephemeral=True)
+                return
+            campos = {"status": "paga", "pago_em": agora_iso(), "atualizado_por": autor}
+            aviso = f"💰 Pagamento confirmado por {interaction.user.mention}. A entrega será feita aqui neste canal."
+        else:
+            if atual == "aguardando_pagamento":
+                await interaction.response.send_message("⚠️ Marque a compra como **paga** antes de entregar.", ephemeral=True)
+                return
+            if atual != "paga":
+                await interaction.response.send_message(f"ℹ️ Esta compra já está: **{STATUS[atual]}**.", ephemeral=True)
+                return
+            campos = {"status": "entregue", "entregue_em": agora_iso(), "atualizado_por": autor}
+            aviso = f"📦 Compra marcada como **entregue** por {interaction.user.mention}. Obrigado por apoiar o servidor! 🤡"
+
+        self.armazenamento.atualizar(chave, **campos)
+
+        # Atualiza o campo "Status" do resumo; some o QR/PIX, que não é mais necessário.
+        resumo = discord.Embed.from_dict(interaction.message.embeds[0].to_dict())
+        for n, campo in enumerate(resumo.fields):
+            if campo.name == "Status":
+                resumo.set_field_at(n, name="Status", value=STATUS[campos["status"]], inline=False)
+        await interaction.response.edit_message(embeds=[resumo], attachments=[], view=CompraView(self))
+        await interaction.channel.send(aviso)
+        await self.atualizar_dashboard()
+
+    async def fechar_compra(self, interaction: discord.Interaction):
+        achado = await self._compra_do_canal(interaction)
+        if not achado:
+            return
+        chave, pedido = achado
+        campos = {"fechado_em": agora_iso(), "atualizado_por": f"{interaction.user} ({interaction.user.id})"}
+        if pedido["status"] == "aguardando_pagamento":
+            campos["status"] = "cancelada"  # fechou sem pagar
+        self.armazenamento.atualizar(chave, **campos)
+        await interaction.response.send_message("🔒 Compra encerrada. Este canal será apagado em 5 segundos...")
+        await self.atualizar_dashboard()
+        await asyncio.sleep(5)
+        try:
+            await interaction.channel.delete(reason=f"Compra encerrada por {interaction.user}")
+        except discord.HTTPException:
             pass
 
     # ---------- finalizar compra ----------
@@ -486,11 +787,19 @@ class LojaCog(commands.Cog):
                 )
                 return
             self.armazenamento.registrar(compra_id, {
+                "id": compra_id,
                 "usuario_id": membro.id,
                 "usuario": str(membro),
+                "nome": membro.display_name,
                 "canal_id": canal.id,
                 "itens": carrinho,
                 "total_centavos": total,
+                "criado_em": agora_iso(),
+                "status": "aguardando_pagamento",
+                "pago_em": None,
+                "entregue_em": None,
+                "fechado_em": None,
+                "atualizado_por": None,
             })
 
         embed = discord.Embed(
@@ -500,14 +809,41 @@ class LojaCog(commands.Cog):
         )
         embed.add_field(name="Total a pagar", value=f"**{brl(total)}**", inline=False)
         embed.add_field(name="Comprador", value=membro.mention, inline=False)
-        embed.set_footer(text="A staff vai combinar o pagamento e a entrega aqui neste canal.")
+        embed.add_field(name="Status", value=STATUS["aguardando_pagamento"], inline=False)
+
+        embeds, arquivos = [embed], []
+        if PIX_COPIA_COLA:
+            codigo = pix.payload_com_valor(PIX_COPIA_COLA, total)
+            embed_pix = discord.Embed(
+                title="💳 Pagamento via PIX",
+                description=(
+                    f"Pague **{brl(total)}** escaneando o QR Code ou usando o PIX copia e cola abaixo.\n"
+                    "Depois **envie o comprovante aqui neste canal**: a staff confirma o pagamento e faz a entrega."
+                ),
+                color=discord.Color.gold(),
+            )
+            embed_pix.add_field(name="Beneficiário", value=pix.beneficiario(codigo) or "—", inline=False)
+            embed_pix.add_field(name="PIX copia e cola", value=f"```{codigo}```", inline=False)
+            embed_pix.set_footer(text="Confira o valor e o beneficiário antes de pagar.")
+            try:
+                png = await asyncio.to_thread(pix.qr_png, codigo)
+                arquivos.append(discord.File(io.BytesIO(png), filename="pix.png"))
+                embed_pix.set_image(url="attachment://pix.png")
+            except Exception as e:  # sem QR ainda dá para pagar pelo copia e cola
+                print(f"[Loja] Falha ao gerar o QR Code do PIX: {e}")
+            embeds.append(embed_pix)
+            embed.set_footer(text="Após pagar, envie o comprovante neste canal.")
+        else:
+            embed.set_footer(text="A staff vai combinar o pagamento e a entrega aqui neste canal.")
 
         mencoes = " ".join([membro.mention] + [r.mention for r in cargos_acesso])
         await canal.send(
             f"{mencoes}\nNovo pedido aberto! Aguarde a staff atendê-lo(a) por aqui. 🤡",
-            embed=embed,
+            embeds=embeds,
+            files=arquivos,
             view=CompraView(self),
         )
+        await self.atualizar_dashboard()
 
         view.stop()
         await interaction.edit_original_response(

@@ -108,9 +108,19 @@ Para entrar no **modo admin**, use o prefixo `admin:` após a menção:
 1. Staff usa `buggy!loja_painel` (ou `buggy!loja_painel #canal`) para postar o painel com o botão **Abrir loja**.
 2. O jogador clica, escolhe os itens e as quantidades (carrinho com total) e finaliza.
 3. O bot cria um canal privado `<nick>-<id da compra>` (ex.: `percy-01`) com o jogador, o bot e a staff, com o resumo e o total.
-4. A staff usa o botão **Fechar compra** no canal para encerrar (o canal é apagado).
+4. No canal vão o resumo, o total e o **PIX** (QR Code + copia e cola) já com o valor da compra. O jogador paga e envia o comprovante ali mesmo.
+5. A staff usa os botões do canal: **Marcar como pago**, **Marcar como entregue** e **Fechar compra** (fechar sem pagar marca como cancelada e apaga o canal).
 
-Configuração (opcional, no `.env`):
+### Painel de compras ao vivo (staff)
+
+`buggy!loja_dashboard` (ou `buggy!loja_dashboard #canal`) posta uma mensagem que o bot atualiza sozinho a cada compra ou mudança de status. Use um canal **só da staff**.
+
+- Mostra data, nome, usuário, ID do usuário, itens, total, status e o canal de cada compra, mais o resumo (faturamento confirmado, aguardando pagamento, pagas, entregues, canceladas).
+- Botões: página anterior/próxima, **Atualizar** e **Exportar CSV** (todas as compras, abre direto no Excel).
+- Só existe um painel por vez: rodar o comando de novo move o painel.
+
+Configuração (no `.env`):
+- `PIX_COPIA_COLA` — código PIX "copia e cola" da conta que recebe. O bot embute o valor de cada compra e gera o QR Code. **Nunca coloque no código nem no GitHub.** Se faltar ou for inválido, o ticket abre sem PIX.
 - `LOJA_CATEGORIA_ID` — categoria onde os canais de compra são criados.
 - `LOJA_CARGO_ALERTA_ID` — cargo avisado em toda compra (padrão: o cargo citado no texto da loja).
 

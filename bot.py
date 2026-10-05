@@ -1384,8 +1384,15 @@ def _build_full_help_embed(ctx: commands.Context = None) -> discord.Embed:
             "`buggy!canais_bloqueados` — Lista canais silenciados\n"
             "`buggy!responder_bots` — Ativa resposta a outros bots (⚠️ risco de loop!)\n"
             "`buggy!ignorar_bots` — Desativa resposta a outros bots (padrão seguro)\n"
-            "`buggy!clonar_canal <ID_origem> <ID_destino> [limite]` — Copia msgs de canal ou tópico para outro (use o ID)\n"
-            "`buggy!loja_painel [#canal]` — Posta o painel da loja (botão \"Abrir loja\")"
+            "`buggy!clonar_canal <ID_origem> <ID_destino> [limite]` — Copia msgs de canal ou tópico para outro (use o ID)"
+        ),
+        inline=False
+    )
+    embed.add_field(
+        name="🛒 Loja (staff)",
+        value=(
+            "`buggy!loja_painel [#canal]` — Posta o painel da loja (botão \"Abrir loja\")\n"
+            "`buggy!loja_dashboard [#canal]` — Posta o painel de compras ao vivo"
         ),
         inline=False
     )
