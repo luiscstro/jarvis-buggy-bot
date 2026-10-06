@@ -69,7 +69,12 @@ class FirestoreRemoto:
             print(f"[Loja] Credenciais do Firebase ilegíveis ({type(e).__name__}). Usando só o arquivo local.")
             return None
         if not info:
-            print("[Loja] Firebase não configurado. Os pedidos ficam só no arquivo local (store_data.json).")
+            caminho = os.getenv("FIREBASE_CREDENTIALS_FILE") or "firebase-credentials.json"
+            print(
+                "[Loja] Firebase não configurado: não achei FIREBASE_CREDENTIALS_BASE64 no ambiente "
+                f"nem o arquivo '{caminho}' em '{os.getcwd()}'. "
+                "Os pedidos ficam só no arquivo local (store_data.json)."
+            )
             return None
         try:
             from google.cloud import firestore
