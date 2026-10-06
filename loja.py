@@ -51,9 +51,17 @@ EMAIL_RE = re.compile(
 # PIX copia e cola da conta que recebe os pagamentos (guarde no .env, nunca no código).
 # O bot embute o valor de cada compra e gera o QR Code a partir dele.
 PIX_COPIA_COLA = (os.getenv("PIX_COPIA_COLA") or "").strip()
-if PIX_COPIA_COLA and not pix.payload_valido(PIX_COPIA_COLA):
-    print("[Loja] PIX_COPIA_COLA inválido (o CRC não confere). PIX desativado.")
+PIX_MOTIVO = ""  # por que o PIX está desativado ("ausente" ou "invalido"); vazio = ativo
+if not PIX_COPIA_COLA:
+    PIX_MOTIVO = "ausente"
+    print("[Loja] ATENÇÃO: PIX_COPIA_COLA não chegou ao bot. Os tickets vão abrir SEM o PIX. "
+          "Confira se o .env enviado no deploy tem essa linha.")
+elif not pix.payload_valido(PIX_COPIA_COLA):
+    PIX_MOTIVO = "invalido"
+    print("[Loja] ATENÇÃO: PIX_COPIA_COLA inválido (o CRC não confere; copie o código inteiro). PIX desativado.")
     PIX_COPIA_COLA = ""
+else:
+    print(f"[Loja] PIX ativo (beneficiário: {pix.beneficiario(PIX_COPIA_COLA) or '?'}).")
 
 STATUS = {
     "aguardando_pagamento": "🟡 Aguardando pagamento",
@@ -502,9 +510,9 @@ class LojaCog(commands.Cog):
             await ctx.send("❌ Não consegui falar com o Firebase. Tente de novo em instantes.", delete_after=20)
 
     # ---------- buggy!loja_armazenamento ----------
-    @commands.command(name="loja_armazenamento")
+    @commands.command(name="loja_armazenamento", aliases=["loja_status", "loja_diagnostico"])
     async def loja_armazenamento(self, ctx: commands.Context):
-        """[Staff] Mostra onde os pedidos estão sendo salvos e se o Firebase está funcionando."""
+        """[Staff] Diagnóstico da loja: armazenamento (Firebase), PIX e permissões do bot."""
         if not self.eh_staff(ctx.author):
             await ctx.send("⛔ Sem permissão, tripulante!")
             return
@@ -526,7 +534,44 @@ class LojaCog(commands.Cog):
             linhas.append(f"🔄 Última gravação no Firebase: {ultima} · na fila: **{st['pendentes']}**")
             if st["ultimo_erro"]:
                 linhas.append(f"❌ Último erro: `{st['ultimo_erro'][:200]}`")
+        linhas += self._diagnostico_pix() + self._diagnostico_permissoes(ctx.guild)
         await ctx.send("\n".join(linhas))
+
+    @staticmethod
+    def _diagnostico_pix() -> list[str]:
+        if PIX_COPIA_COLA:
+            return [f"✅ **PIX ativo** (beneficiário: **{pix.beneficiario(PIX_COPIA_COLA) or '?'}**)"]
+        if PIX_MOTIVO == "invalido":
+            return ["❌ **PIX desativado:** o código em `PIX_COPIA_COLA` não passou na conferência (CRC). Copie de novo, inteiro."]
+        return ["❌ **PIX desativado:** a variável `PIX_COPIA_COLA` não chegou ao bot. Confira o `.env` enviado no deploy e reinicie."]
+
+    @staticmethod
+    def _diagnostico_permissoes(guild: Optional[discord.Guild]) -> list[str]:
+        """Confere o que o bot precisa para abrir o canal da compra e enviar o QR Code."""
+        if guild is None:
+            return []
+        necessarias = [
+            ("manage_channels", "Gerenciar Canais"), ("send_messages", "Enviar Mensagens"), ("embed_links", "Inserir Links"),
+            ("attach_files", "Anexar Arquivos"), ("read_message_history", "Ver Histórico de Mensagens"),
+            ("manage_messages", "Gerenciar Mensagens"),
+        ]
+        categoria = guild.get_channel(LOJA_CATEGORIA_ID) if LOJA_CATEGORIA_ID else None
+        linhas = []
+        if LOJA_CATEGORIA_ID and not isinstance(categoria, discord.CategoryChannel):
+            linhas.append(f"⚠️ **Categoria não encontrada** (`LOJA_CATEGORIA_ID={LOJA_CATEGORIA_ID}`): os canais ficam soltos.")
+        elif categoria is None:
+            linhas.append("ℹ️ Sem categoria configurada: os canais de compra ficam soltos no servidor.")
+        else:
+            linhas.append(f"✅ Categoria das compras: **{categoria.name}**")
+        permissoes = categoria.permissions_for(guild.me) if categoria is not None else guild.me.guild_permissions
+        faltando = [nome for attr, nome in necessarias if not getattr(permissoes, attr, False)]
+        onde = f"na categoria **{categoria.name}**" if categoria is not None else "no servidor"
+        if faltando:
+            linhas.append(f"❌ **Faltam permissões ao bot {onde}:** {', '.join(faltando)}. "
+                          "Sem **Anexar Arquivos** o QR Code não é enviado; sem **Gerenciar Canais** a compra nem abre.")
+        else:
+            linhas.append(f"✅ Permissões do bot {onde}: tudo certo para abrir o canal e enviar o QR Code.")
+        return linhas
 
     # ---------- status da compra (botões da staff) ----------
     async def _compra_do_canal(self, interaction: discord.Interaction):
@@ -691,7 +736,7 @@ class LojaCog(commands.Cog):
         embed.add_field(name="Comprador", value=membro.mention, inline=False)
         embed.add_field(name="Status", value=STATUS["aguardando_pagamento"], inline=False)
 
-        embeds, arquivos = [embed], []
+        embeds, arquivos, embed_pix, codigo = [embed], [], None, ""
         if PIX_COPIA_COLA:
             codigo = pix.payload_com_valor(PIX_COPIA_COLA, total)
             embed_pix = discord.Embed(
@@ -714,22 +759,58 @@ class LojaCog(commands.Cog):
             embeds.append(embed_pix)
             embed.set_footer(text="Após pagar, envie o comprovante neste canal.")
         else:
+            embed.add_field(name="Pagamento", value="O PIX não está disponível no momento: a staff vai enviar os dados de pagamento aqui.", inline=False)
             embed.set_footer(text="A staff vai combinar o pagamento e a entrega aqui neste canal.")
 
         mencoes = " ".join([membro.mention] + [r.mention for r in cargos_acesso])
-        await canal.send(
-            f"{mencoes}\nNovo pedido aberto! Aguarde a staff atendê-lo(a) por aqui. 🤡",
-            embeds=embeds,
-            files=arquivos,
-            view=CompraView(self),
+        texto_simples = f"**Compra {compra_id:02d}** — total **{brl(total)}**\n{linhas_carrinho(carrinho)}"
+        if codigo:
+            texto_simples += f"\n\n💳 **PIX copia e cola:**\n```{codigo}```\nDepois envie o comprovante aqui."
+        enviado = await self._enviar_ticket(
+            canal, f"{mencoes}\nNovo pedido aberto! Aguarde a staff atendê-lo(a) por aqui. 🤡",
+            embeds, arquivos, embed_pix, texto_simples,
         )
 
         view.stop()
+        aviso = "" if enviado else "\n⚠️ Não consegui enviar os detalhes no canal. Avise a staff."
         await interaction.edit_original_response(
-            content=f"✅ Compra **{compra_id:02d}** criada! Continue o atendimento em {canal.mention}.",
+            content=f"✅ Compra **{compra_id:02d}** criada! Continue o atendimento em {canal.mention}.{aviso}",
             embeds=[],
             view=None,
         )
+
+    async def _enviar_ticket(self, canal, conteudo, embeds, arquivos, embed_pix, texto_simples) -> bool:
+        """Envia o resumo e o PIX no canal da compra, com plano B se o Discord recusar.
+
+        1) completo (embeds + QR Code); 2) sem o QR Code (o bot pode estar sem "Anexar Arquivos"),
+        mantendo o copia e cola; 3) só texto. A compra já foi registrada, então o canal nunca
+        pode ficar vazio. Devolve False só se nenhuma das três funcionar.
+        """
+        try:
+            await canal.send(content=conteudo, embeds=embeds, files=arquivos, view=CompraView(self))
+            return True
+        except (discord.Forbidden, discord.HTTPException) as e:
+            print(f"[Loja] Não consegui enviar o ticket completo ({type(e).__name__}: {e}). Tentando sem o QR Code.")
+
+        if arquivos and embed_pix is not None:
+            embed_pix.set_image(url=None)
+            try:
+                await canal.send(
+                    content=conteudo + "\n⚠️ Não consegui anexar o QR Code (o bot precisa da permissão **Anexar Arquivos**). "
+                                       "Use o PIX copia e cola abaixo.",
+                    embeds=embeds, view=CompraView(self),
+                )
+                return True
+            except (discord.Forbidden, discord.HTTPException) as e:
+                print(f"[Loja] Também falhou sem o QR Code ({type(e).__name__}: {e}). Tentando só texto.")
+
+        try:
+            await canal.send(content=conteudo + "\n\n" + texto_simples, view=CompraView(self))
+            return True
+        except (discord.Forbidden, discord.HTTPException) as e:
+            print(f"[Loja] Não consegui enviar NADA no canal da compra ({type(e).__name__}: {e}). "
+                  "Confira as permissões do bot (use buggy!loja_armazenamento).")
+            return False
 
 
 async def setup_loja(bot: commands.Bot, staff_roles: list[str]):
