@@ -4,7 +4,8 @@ A partir do código PIX estático da conta (variável de ambiente PIX_COPIA_COLA
 gera um código com o VALOR da compra já embutido, no padrão EMV do Banco Central,
 e o QR Code correspondente.
 """
-import io
+import struct
+import zlib
 
 import qrcode
 
@@ -61,11 +62,28 @@ def payload_com_valor(payload: str, centavos: int) -> str:
     return f"{corpo}{_crc16(corpo):04X}"
 
 
-def qr_png(payload: str) -> bytes:
-    """QR Code (PNG) do código PIX."""
-    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=8, border=4)
+def _chunk_png(tipo: bytes, dados: bytes) -> bytes:
+    return struct.pack(">I", len(dados)) + tipo + dados + struct.pack(">I", zlib.crc32(tipo + dados) & 0xFFFFFFFF)
+
+
+def qr_png(payload: str, caixa: int = 8, borda: int = 4) -> bytes:
+    """QR Code (PNG, preto sobre branco) do código PIX.
+
+    O PNG é montado aqui mesmo, a partir da matriz do QR Code, SEM Pillow: assim o QR Code
+    funciona em qualquer hospedagem, mesmo que bibliotecas de imagem não estejam instaladas.
+    """
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_M, box_size=1, border=0)
     qr.add_data(payload)
     qr.make(fit=True)
-    buf = io.BytesIO()
-    qr.make_image(fill_color="black", back_color="white").save(buf, format="PNG")
-    return buf.getvalue()
+    matriz = qr.get_matrix()
+    lado = (len(matriz) + 2 * borda) * caixa
+    margem = b"\xff" * (borda * caixa)
+    faixa_branca = b"\x00" + b"\xff" * lado                      # byte de filtro 0 + pixels brancos
+    linhas = [faixa_branca] * (borda * caixa)
+    for fila in matriz:
+        pixels = margem + b"".join((b"\x00" if modulo else b"\xff") * caixa for modulo in fila) + margem
+        linhas += [b"\x00" + pixels] * caixa
+    linhas += [faixa_branca] * (borda * caixa)
+    cabecalho = struct.pack(">IIBBBBB", lado, lado, 8, 0, 0, 0, 0)   # 8 bits, tons de cinza
+    return (b"\x89PNG\r\n\x1a\n" + _chunk_png(b"IHDR", cabecalho)
+            + _chunk_png(b"IDAT", zlib.compress(b"".join(linhas), 9)) + _chunk_png(b"IEND", b""))

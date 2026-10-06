@@ -540,7 +540,12 @@ class LojaCog(commands.Cog):
     @staticmethod
     def _diagnostico_pix() -> list[str]:
         if PIX_COPIA_COLA:
-            return [f"✅ **PIX ativo** (beneficiário: **{pix.beneficiario(PIX_COPIA_COLA) or '?'}**)"]
+            try:  # teste real: gera o QR Code do PIX configurado
+                tamanho = len(pix.qr_png(pix.payload_com_valor(PIX_COPIA_COLA, 500)))
+                qr = f"✅ QR Code gerando normalmente ({tamanho // 1024 or 1} KB)"
+            except Exception as e:
+                qr = f"❌ **QR Code NÃO está sendo gerado:** `{type(e).__name__}: {str(e)[:120]}`"
+            return [f"✅ **PIX ativo** (beneficiário: **{pix.beneficiario(PIX_COPIA_COLA) or '?'}**)", qr]
         if PIX_MOTIVO == "invalido":
             return ["❌ **PIX desativado:** o código em `PIX_COPIA_COLA` não passou na conferência (CRC). Copie de novo, inteiro."]
         return ["❌ **PIX desativado:** a variável `PIX_COPIA_COLA` não chegou ao bot. Confira o `.env` enviado no deploy e reinicie."]
@@ -755,7 +760,8 @@ class LojaCog(commands.Cog):
                 arquivos.append(discord.File(io.BytesIO(png), filename="pix.png"))
                 embed_pix.set_image(url="attachment://pix.png")
             except Exception as e:  # sem QR ainda dá para pagar pelo copia e cola
-                print(f"[Loja] Falha ao gerar o QR Code do PIX: {e}")
+                print(f"[Loja] Falha ao gerar o QR Code do PIX ({type(e).__name__}: {e}).")
+                embed_pix.description += "\n\n⚠️ Não consegui gerar o QR Code agora. Use o PIX copia e cola abaixo."
             embeds.append(embed_pix)
             embed.set_footer(text="Após pagar, envie o comprovante neste canal.")
         else:

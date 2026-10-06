@@ -4,7 +4,7 @@ import random
 import pytest
 
 import pix
-from conftest import BASE_PIX_TESTE, PIX_TESTE
+from conftest import BASE_PIX_TESTE, PIX_TESTE, RAIZ
 
 
 def test_crc16_vetor_de_referencia():
@@ -82,6 +82,44 @@ def test_beneficiario():
 def test_qr_e_um_png_valido():
     png = pix.qr_png(pix.payload_com_valor(PIX_TESTE, 2500))
     assert png[:8] == b"\x89PNG\r\n\x1a\n" and len(png) > 300
+
+
+def test_qr_nao_depende_do_pillow():
+    """Hospedagens sem Pillow geravam erro e o QR sumia do ticket (só a chave aparecia)."""
+    import subprocess
+    import sys
+    codigo = (
+        "import sys; sys.modules['PIL'] = None\n"          # qualquer 'import PIL' passa a falhar
+        "import pix\n"
+        "png = pix.qr_png(pix.payload_com_valor(sys.argv[1], 2500))\n"
+        "assert png[:8] == bytes([137, 80, 78, 71, 13, 10, 26, 10]); print(len(png))"
+    )
+    r = subprocess.run([sys.executable, "-c", codigo, PIX_TESTE], cwd=RAIZ, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[-400:]
+    assert int(r.stdout.strip()) > 300
+
+
+def test_png_do_qr_e_valido_e_tem_o_tamanho_esperado():
+    import struct
+    import zlib
+    png = pix.qr_png(pix.payload_com_valor(PIX_TESTE, 2500))
+    assert png[:8] == b"\x89PNG\r\n\x1a\n" and png.endswith(b"IEND\xaeB`\x82")
+    largura, altura, profundidade, tipo = struct.unpack(">IIBB", png[16:26])
+    assert largura == altura and largura % 8 == 0 and (profundidade, tipo) == (8, 0)
+    # as linhas descompactadas têm exatamente (1 byte de filtro + largura) por linha
+    idat = png[png.index(b"IDAT") + 4:png.index(b"IEND") - 8]
+    assert len(zlib.decompress(idat)) == altura * (largura + 1)
+
+
+def test_qr_tem_quatro_modulos_de_margem_branca_e_so_preto_e_branco():
+    import zlib
+    png = pix.qr_png(pix.payload_com_valor(PIX_TESTE, 2500), caixa=4, borda=4)
+    largura = int.from_bytes(png[16:20], "big")
+    bruto = zlib.decompress(png[png.index(b"IDAT") + 4:png.index(b"IEND") - 8])
+    assert set(bruto) <= {0, 255}                                  # só preto, branco e o byte de filtro 0
+    linhas = [bruto[i * (largura + 1) + 1:(i + 1) * (largura + 1)] for i in range(largura)]
+    assert all(set(l) == {255} for l in linhas[:16]) and all(set(l) == {255} for l in linhas[-16:])
+    assert all(set(l[:16]) == {255} and set(l[-16:]) == {255} for l in linhas)
 
 
 def test_qr_decodifica_para_o_mesmo_codigo():
