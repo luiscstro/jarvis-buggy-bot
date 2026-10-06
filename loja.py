@@ -8,17 +8,17 @@ Fluxo:
      (ex.: percy-01) visível só para o jogador, o bot e a staff, com o resumo
      do pedido, o total a pagar e o PIX (copia e cola + QR Code) já com o valor.
   4. A staff marca a compra como paga/entregue no próprio canal e acompanha tudo
-     no painel ao vivo (`buggy!loja_dashboard`).
+     no painel web ao vivo (pasta dashboard/); quem pode entrar é definido com
+     `buggy!loja_acesso`.
 
 Os pedidos são guardados no Firebase Firestore (com cópia local); veja loja_dados.py.
 """
 import asyncio
-import csv
 import io
 import os
 import re
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
 import discord
@@ -39,6 +39,7 @@ LOJA_CATEGORIA_ID = int(os.getenv("LOJA_CATEGORIA_ID", "0") or 0)
 LOJA_CARGO_ALERTA_ID = int(os.getenv("LOJA_CARGO_ALERTA_ID", "1222232432527413389") or 0)
 
 LOJA_ARQUIVO = "store_data.json"
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # PIX copia e cola da conta que recebe os pagamentos (guarde no .env, nunca no código).
 # O bot embute o valor de cada compra e gera o QR Code a partir dele.
@@ -47,16 +48,12 @@ if PIX_COPIA_COLA and not pix.payload_valido(PIX_COPIA_COLA):
     print("[Loja] PIX_COPIA_COLA inválido (o CRC não confere). PIX desativado.")
     PIX_COPIA_COLA = ""
 
-FUSO_BRASILIA = timezone(timedelta(hours=-3))
-
 STATUS = {
     "aguardando_pagamento": "🟡 Aguardando pagamento",
     "paga": "💰 Paga — a entregar",
     "entregue": "📦 Entregue",
     "cancelada": "❌ Cancelada",
 }
-STATUS_CONFIRMADOS = ("paga", "entregue")  # entram no faturamento
-COMPRAS_POR_PAGINA = 5
 
 # =============================================
 #  CATÁLOGO
@@ -192,89 +189,6 @@ def linhas_carrinho(carrinho: dict[str, int]) -> str:
 
 def epoch(iso: str) -> int:
     return int(datetime.fromisoformat(iso).timestamp())
-
-
-def data_brasilia(iso: Optional[str]) -> str:
-    return datetime.fromisoformat(iso).astimezone(FUSO_BRASILIA).strftime("%d/%m/%Y %H:%M:%S") if iso else ""
-
-
-def itens_texto(itens: dict[str, int]) -> str:
-    return ", ".join(f"{q}x {ITENS.get(k, {'nome': k})['nome']}" for k, q in itens.items())
-
-
-# =============================================
-#  DASHBOARD — funções puras (embed e CSV)
-# =============================================
-def resumo_compras(pedidos: list[dict]) -> dict[str, tuple[int, int]]:
-    """{status: (quantidade, valor em centavos)} para cada status."""
-    resumo = {st: (0, 0) for st in STATUS}
-    for p in pedidos:
-        qtd, valor = resumo.get(p["status"], (0, 0))
-        resumo[p["status"]] = (qtd + 1, valor + p["total_centavos"])
-    return resumo
-
-
-def bloco_compra(p: dict) -> str:
-    ts = epoch(p["criado_em"])
-    canal = " · 🔒 canal fechado" if p.get("fechado_em") else f" · <#{p['canal_id']}>"
-    nome = discord.utils.escape_markdown(p.get("nome") or p["usuario"])
-    itens = itens_texto(p["itens"])
-    if len(itens) > 300:
-        itens = itens[:297] + "..."
-    return (
-        f"**#{p['id']:02d}** · <t:{ts}:d> às <t:{ts}:t> · {STATUS.get(p['status'], p['status'])}\n"
-        f"👤 **{nome}** (`{p['usuario']}`) · ID `{p['usuario_id']}` · <@{p['usuario_id']}>\n"
-        f"🛍️ {itens}\n"
-        f"💵 **{brl(p['total_centavos'])}**{canal}"
-    )
-
-
-def embed_dashboard(pedidos: list[dict], pagina: int) -> tuple[discord.Embed, int, int]:
-    """Monta o painel. Devolve (embed, total de páginas, página efetiva)."""
-    total_paginas = max(1, -(-len(pedidos) // COMPRAS_POR_PAGINA))
-    pagina = max(0, min(pagina, total_paginas - 1))
-    fatia = pedidos[pagina * COMPRAS_POR_PAGINA:(pagina + 1) * COMPRAS_POR_PAGINA]
-
-    resumo = resumo_compras(pedidos)
-    faturamento = sum(resumo[st][1] for st in STATUS_CONFIRMADOS)
-    embed = discord.Embed(
-        title="📊 Painel de Compras",
-        description="\n\n".join(bloco_compra(p) for p in fatia) or "Nenhuma compra registrada ainda.",
-        color=discord.Color.orange(),
-    )
-    embed.add_field(name="🧾 Compras", value=str(len(pedidos)), inline=True)
-    embed.add_field(name="💵 Faturamento confirmado", value=brl(faturamento), inline=True)
-    for st in STATUS:
-        qtd, valor = resumo[st]
-        embed.add_field(name=STATUS[st], value=f"{qtd} — {brl(valor)}", inline=True)
-    embed.set_footer(text=f"Página {pagina + 1}/{total_paginas} · atualizado ao vivo")
-    embed.timestamp = discord.utils.utcnow()
-    return embed, total_paginas, pagina
-
-
-def _csv_seguro(valor) -> str:
-    """Evita que o Excel execute fórmulas vindas de nicks (ex.: '=CMD(...)')."""
-    texto = str(valor)
-    return "'" + texto if texto[:1] in ("=", "+", "-", "@", "\t", "\r") else texto
-
-
-def csv_compras(pedidos: list[dict]) -> bytes:
-    """CSV (separador ';', UTF-8 com BOM, abre direto no Excel) com todas as compras."""
-    saida = io.StringIO()
-    escritor = csv.writer(saida, delimiter=";")
-    escritor.writerow([
-        "ID da compra", "Data/hora (Brasília)", "Nome", "Usuário", "ID do usuário", "Itens",
-        "Total (R$)", "Status", "Pago em", "Entregue em", "Fechado em", "Atualizado por", "ID do canal",
-    ])
-    for p in reversed(pedidos):  # do mais antigo para o mais recente
-        escritor.writerow([
-            f"{p['id']:02d}", data_brasilia(p["criado_em"]), _csv_seguro(p.get("nome") or ""),
-            _csv_seguro(p["usuario"]), p["usuario_id"], _csv_seguro(itens_texto(p["itens"])),
-            f"{p['total_centavos'] // 100},{p['total_centavos'] % 100:02d}", STATUS.get(p["status"], p["status"]),
-            data_brasilia(p.get("pago_em")), data_brasilia(p.get("entregue_em")), data_brasilia(p.get("fechado_em")),
-            _csv_seguro(p.get("atualizado_por") or ""), p["canal_id"],
-        ])
-    return ("\ufeff" + saida.getvalue()).encode("utf-8")
 
 
 # =============================================
@@ -485,52 +399,6 @@ class CompraView(ui.View):
 
 
 # =============================================
-#  DASHBOARD AO VIVO (mensagem fixa no canal da staff)
-# =============================================
-class DashboardView(ui.View):
-    def __init__(self, cog: "LojaCog", pagina: int = 0, total_paginas: int = 1):
-        super().__init__(timeout=None)
-        self.cog = cog
-        self.anterior.disabled = pagina <= 0
-        self.proxima.disabled = pagina >= total_paginas - 1
-
-    async def _checar_staff(self, interaction: discord.Interaction) -> bool:
-        if self.cog.eh_staff(interaction.user):
-            return True
-        await interaction.response.send_message("⛔ Só a staff pode usar o painel.", ephemeral=True)
-        return False
-
-    @ui.button(emoji="⬅️", style=discord.ButtonStyle.secondary, custom_id="loja:dash:anterior")
-    async def anterior(self, interaction: discord.Interaction, button: ui.Button):
-        if await self._checar_staff(interaction):
-            self.cog.dash_pagina -= 1
-            await self.cog.redesenhar_dashboard(interaction)
-
-    @ui.button(emoji="➡️", style=discord.ButtonStyle.secondary, custom_id="loja:dash:proxima")
-    async def proxima(self, interaction: discord.Interaction, button: ui.Button):
-        if await self._checar_staff(interaction):
-            self.cog.dash_pagina += 1
-            await self.cog.redesenhar_dashboard(interaction)
-
-    @ui.button(label="Atualizar", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="loja:dash:atualizar")
-    async def atualizar(self, interaction: discord.Interaction, button: ui.Button):
-        if await self._checar_staff(interaction):
-            await self.cog.redesenhar_dashboard(interaction)
-
-    @ui.button(label="Exportar CSV", emoji="📥", style=discord.ButtonStyle.primary, custom_id="loja:dash:csv")
-    async def exportar(self, interaction: discord.Interaction, button: ui.Button):
-        if not await self._checar_staff(interaction):
-            return
-        pedidos = self.cog.armazenamento.todos()
-        nome = f"compras_{datetime.now(FUSO_BRASILIA):%Y-%m-%d_%H-%M}.csv"
-        await interaction.response.send_message(
-            f"📥 {len(pedidos)} compra(s) exportada(s).",
-            file=discord.File(io.BytesIO(csv_compras(pedidos)), filename=nome),
-            ephemeral=True,
-        )
-
-
-# =============================================
 #  COG
 # =============================================
 class LojaCog(commands.Cog):
@@ -539,16 +407,26 @@ class LojaCog(commands.Cog):
         self.staff_roles = staff_roles
         self.armazenamento = armazenamento
         self.lock = asyncio.Lock()
-        self.dash_pagina = 0
 
     async def cog_load(self):
         self.bot.add_view(PainelLojaView(self))
         self.bot.add_view(CompraView(self))
-        self.bot.add_view(DashboardView(self))
 
     @commands.Cog.listener()
     async def on_ready(self):
-        await self.atualizar_dashboard()  # reflete o estado atual logo que o bot sobe
+        await self._remover_painel_antigo()
+
+    async def _remover_painel_antigo(self):
+        """O painel de compras agora é web: apaga a mensagem do painel antigo do Discord, se existir."""
+        config = self.armazenamento.dados.get("dashboard")
+        if not config:
+            return
+        try:
+            canal = self.bot.get_channel(config["canal_id"]) or await self.bot.fetch_channel(config["canal_id"])
+            await (await canal.fetch_message(config["mensagem_id"])).delete()
+        except discord.DiscordException:
+            pass  # já foi apagada ou o canal sumiu
+        self.armazenamento.definir_dashboard(None)
 
     def eh_staff(self, membro: discord.abc.User) -> bool:
         return isinstance(membro, discord.Member) and any(r.name in self.staff_roles for r in membro.roles)
@@ -572,29 +450,49 @@ class LojaCog(commands.Cog):
         except (discord.Forbidden, discord.NotFound):
             pass
 
-    # ---------- buggy!loja_dashboard ----------
-    @commands.command(name="loja_dashboard")
-    async def loja_dashboard(self, ctx: commands.Context, canal: Optional[discord.TextChannel] = None):
-        """[Staff] Posta o painel de compras ao vivo no canal atual (ou no informado)."""
+    # ---------- buggy!loja_acesso ----------
+    @commands.command(name="loja_acesso")
+    async def loja_acesso(self, ctx: commands.Context, acao: str = "listar", email: Optional[str] = None):
+        """[Staff] Controla quem pode entrar no painel web de compras (login com Google)."""
         if not self.eh_staff(ctx.author):
             await ctx.send("⛔ Sem permissão, tripulante!")
             return
-        destino = canal or ctx.channel
-        antigo = self.armazenamento.dados.get("dashboard")
-        if antigo:  # só existe um painel ao vivo por vez
-            try:
-                canal_antigo = self.bot.get_channel(antigo["canal_id"]) or await self.bot.fetch_channel(antigo["canal_id"])
-                await (await canal_antigo.fetch_message(antigo["mensagem_id"])).delete()
-            except discord.DiscordException:
-                pass
-        embed, total, pagina = embed_dashboard(self.armazenamento.todos(), 0)
-        self.dash_pagina = pagina
-        mensagem = await destino.send(embed=embed, view=DashboardView(self, pagina, total))
-        self.armazenamento.definir_dashboard(destino.id, mensagem.id)
+        remoto = self.armazenamento.remoto
+        if not remoto:
+            await ctx.send("⚠️ O painel web precisa do Firebase configurado (veja `buggy!loja_armazenamento`).")
+            return
+
+        acao = acao.lower()
+        if acao in ("listar", "lista"):
+            emails = await asyncio.to_thread(remoto.listar_staff)
+            texto = "\n".join(f"• `{e}`" for e in emails) or "Ninguém foi autorizado ainda."
+            await ctx.send(f"🔑 **Acesso ao painel web ({len(emails)}):**\n{texto}", delete_after=60)
+            return
+
+        email = (email or "").strip().lower()
+        if acao not in ("adicionar", "add", "remover", "remove") or not EMAIL_RE.match(email):
+            await ctx.send(
+                "Use: `buggy!loja_acesso listar`, `buggy!loja_acesso adicionar <email>` "
+                "ou `buggy!loja_acesso remover <email>`. O e-mail deve ser o da conta Google usada no login.",
+                delete_after=30,
+            )
+            return
         try:
-            await ctx.message.delete()
+            await ctx.message.delete()  # não deixa o e-mail exposto no canal
         except (discord.Forbidden, discord.NotFound):
             pass
+        try:
+            if acao in ("adicionar", "add"):
+                await asyncio.to_thread(remoto.adicionar_staff, email, f"{ctx.author} ({ctx.author.id})")
+                await ctx.send(f"✅ `{email}` agora pode entrar no painel web.", delete_after=20)
+            else:
+                existia = await asyncio.to_thread(remoto.remover_staff, email)
+                await ctx.send(
+                    f"🗑️ Acesso de `{email}` removido." if existia else f"ℹ️ `{email}` não tinha acesso.", delete_after=20
+                )
+        except Exception as e:
+            print(f"[Loja] Erro ao mudar o acesso ao painel web: {type(e).__name__}: {e}")
+            await ctx.send("❌ Não consegui falar com o Firebase. Tente de novo em instantes.", delete_after=20)
 
     # ---------- buggy!loja_armazenamento ----------
     @commands.command(name="loja_armazenamento")
@@ -622,28 +520,6 @@ class LojaCog(commands.Cog):
             if st["ultimo_erro"]:
                 linhas.append(f"❌ Último erro: `{st['ultimo_erro'][:200]}`")
         await ctx.send("\n".join(linhas))
-
-    async def atualizar_dashboard(self):
-        """Reedita o painel ao vivo. Nunca levanta erro: o painel não pode quebrar uma compra."""
-        config = self.armazenamento.dados.get("dashboard")
-        if not config:
-            return
-        try:
-            canal = self.bot.get_channel(config["canal_id"]) or await self.bot.fetch_channel(config["canal_id"])
-            mensagem = await canal.fetch_message(config["mensagem_id"])
-            embed, total, pagina = embed_dashboard(self.armazenamento.todos(), self.dash_pagina)
-            self.dash_pagina = pagina
-            await mensagem.edit(embed=embed, view=DashboardView(self, pagina, total))
-        except discord.NotFound:
-            print("[Loja] A mensagem do painel foi apagada; use buggy!loja_dashboard para criar outro.")
-            self.armazenamento.definir_dashboard(None)
-        except discord.DiscordException as e:
-            print(f"[Loja] Não consegui atualizar o painel de compras: {e}")
-
-    async def redesenhar_dashboard(self, interaction: discord.Interaction):
-        embed, total, pagina = embed_dashboard(self.armazenamento.todos(), self.dash_pagina)
-        self.dash_pagina = pagina
-        await interaction.response.edit_message(embed=embed, view=DashboardView(self, pagina, total))
 
     # ---------- status da compra (botões da staff) ----------
     async def _compra_do_canal(self, interaction: discord.Interaction):
@@ -689,7 +565,6 @@ class LojaCog(commands.Cog):
                 resumo.set_field_at(n, name="Status", value=STATUS[campos["status"]], inline=False)
         await interaction.response.edit_message(embeds=[resumo], attachments=[], view=CompraView(self))
         await interaction.channel.send(aviso)
-        await self.atualizar_dashboard()
 
     async def fechar_compra(self, interaction: discord.Interaction):
         achado = await self._compra_do_canal(interaction)
@@ -701,7 +576,6 @@ class LojaCog(commands.Cog):
             campos["status"] = "cancelada"  # fechou sem pagar
         self.armazenamento.atualizar(chave, **campos)
         await interaction.response.send_message("🔒 Compra encerrada. Este canal será apagado em 5 segundos...")
-        await self.atualizar_dashboard()
         await asyncio.sleep(5)
         try:
             await interaction.channel.delete(reason=f"Compra encerrada por {interaction.user}")
@@ -774,6 +648,9 @@ class LojaCog(commands.Cog):
                 "nome": membro.display_name,
                 "canal_id": canal.id,
                 "itens": carrinho,
+                "itens_detalhe": [
+                    {"nome": ITENS[k]["nome"], "qtd": q, "preco_centavos": ITENS[k]["preco"]} for k, q in carrinho.items()
+                ],
                 "total_centavos": total,
                 "criado_em": agora_iso(),
                 "status": "aguardando_pagamento",
@@ -824,7 +701,6 @@ class LojaCog(commands.Cog):
             files=arquivos,
             view=CompraView(self),
         )
-        await self.atualizar_dashboard()
 
         view.stop()
         await interaction.edit_original_response(
