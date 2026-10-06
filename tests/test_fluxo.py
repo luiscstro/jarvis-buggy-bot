@@ -69,7 +69,7 @@ def test_nick_malicioso_nao_vira_mencao_nem_nome_invalido(cog):
     user = membro(9, "@everyone <@&1> #geral", "x#0")
     _, canal = run(comprar(cog, user, guild=g))
     assert re.fullmatch(r"[a-z0-9-]+-\d{2,}", g.create_text_channel.call_args.args[0])
-    conteudo = canal.send.call_args.args[0]
+    conteudo = canal.send.call_args.kwargs["content"]
     assert "@everyone" not in conteudo and "@here" not in conteudo and "<@&1>" not in conteudo
 
 
