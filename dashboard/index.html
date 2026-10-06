@@ -161,6 +161,7 @@
         <tbody id="rows"></tbody>
       </table>
     </div>
+    <p style="text-align:center"><button class="btn" id="mais" hidden></button></p>
   </section>
 </div>
 
@@ -210,7 +211,8 @@ const el = (tag, props = {}, ...filhos) => {
 let pedidos = [];       // lista atual
 let primeiraCarga = true;
 let novos = new Set();  // ids a destacar
-const estado = { busca: "", status: "", periodo: 0, ordem: "id", dir: -1 };
+const POR_PAGINA = 100;  // linhas desenhadas por vez (o resumo, a soma e o CSV usam TODAS as compras filtradas)
+const estado = { busca: "", status: "", periodo: 0, ordem: "id", dir: -1, limite: POR_PAGINA };
 
 // ---------- telas de estado ----------
 function mostrarEstado(titulo, texto, ...acoes) {
@@ -300,7 +302,7 @@ function renderChart() {
 
 // ---------- tabela ----------
 function filtrados() {
-  const q = estado.busca.trim().toLowerCase();
+  const q = estado.busca.trim().toLowerCase().replace(/^#/, "");
   const limite = estado.periodo ? Date.now() - (estado.periodo === 1 ? 0 : estado.periodo) * 864e5 : 0;
   const inicioHoje = (() => { const d = new Date(); return new Date(diaChave(d) + "T00:00:00-03:00").getTime(); })();
   let lista = pedidos.filter((p) => {
@@ -329,7 +331,7 @@ function renderHead() {
       const ativo = estado.ordem === c.id;
       if (ativo) th.setAttribute("aria-sort", estado.dir > 0 ? "ascending" : "descending");
       const b = el("button", { type: "button" }, c.label, el("span", { class: "arrow", text: ativo ? (estado.dir > 0 ? "▲" : "▼") : "↕" }));
-      b.addEventListener("click", () => { if (estado.ordem === c.id) estado.dir *= -1; else { estado.ordem = c.id; estado.dir = c.id === "nome" || c.id === "status" ? 1 : -1; } renderHead(); renderRows(); });
+      b.addEventListener("click", () => { if (estado.ordem === c.id) estado.dir *= -1; else { estado.ordem = c.id; estado.dir = c.id === "nome" || c.id === "status" ? 1 : -1; } estado.limite = POR_PAGINA; renderHead(); renderRows(); });
       th.append(b);
     } else th.textContent = c.label;
     tr.append(th);
@@ -354,14 +356,19 @@ function andamento(p) {
 function renderRows() {
   const lista = filtrados();
   const total = lista.reduce((s, p) => s + p.total, 0);
-  $("count").textContent = `Mostrando ${lista.length} de ${pedidos.length} compra(s) · soma ${brl(total)}`;
+  const visiveis = lista.slice(0, estado.limite);
+  $("count").textContent = `Mostrando ${visiveis.length} de ${lista.length} compra(s)` +
+    (lista.length !== pedidos.length ? ` (filtradas de ${pedidos.length})` : "") + ` · soma ${brl(total)}`;
+  const mais = $("mais");
+  mais.hidden = lista.length <= visiveis.length;
+  mais.textContent = `Mostrar mais ${Math.min(POR_PAGINA, lista.length - visiveis.length)} (faltam ${lista.length - visiveis.length})`;
   const tb = $("rows"); tb.replaceChildren();
   if (!lista.length) {
     const vazio = el("td", { class: "empty", colspan: String(COLUNAS.length), text: pedidos.length ? "Nenhuma compra com esses filtros." : "Nenhuma compra registrada ainda." });
     vazio.removeAttribute("data-label");
     tb.append(el("tr", {}, vazio)); return;
   }
-  for (const p of lista) {
+  for (const p of visiveis) {
     const copiar = el("button", { type: "button", title: "Copiar ID", "aria-label": `Copiar ID ${p.usuario_id}`, text: "copiar" });
     copiar.addEventListener("click", async () => {
       try { await navigator.clipboard.writeText(p.usuario_id); copiar.textContent = "copiado"; setTimeout(() => (copiar.textContent = "copiar"), 1200); } catch { /* sem permissão de área de transferência */ }
@@ -408,9 +415,10 @@ function ligarControles() {
   const sel = $("fStatus");
   sel.append(el("option", { value: "", text: "Todos os status" }));
   for (const [k, v] of Object.entries(STATUS)) sel.append(el("option", { value: k, text: v }));
-  $("q").addEventListener("input", (e) => { estado.busca = e.target.value; renderRows(); });
-  sel.addEventListener("change", (e) => { estado.status = e.target.value; renderRows(); });
-  $("fPeriodo").addEventListener("change", (e) => { estado.periodo = Number(e.target.value); renderRows(); });
+  $("q").addEventListener("input", (e) => { estado.busca = e.target.value; estado.limite = POR_PAGINA; renderRows(); });
+  $("mais").addEventListener("click", () => { estado.limite += POR_PAGINA; renderRows(); });
+  sel.addEventListener("change", (e) => { estado.status = e.target.value; estado.limite = POR_PAGINA; renderRows(); });
+  $("fPeriodo").addEventListener("change", (e) => { estado.periodo = Number(e.target.value); estado.limite = POR_PAGINA; renderRows(); });
   $("csv").addEventListener("click", exportarCsv);
   renderHead();
 }
@@ -431,7 +439,13 @@ function demo() {
     criado_em: iso(base - ago * h), pago_em: pagoDepois != null ? iso(base - (ago - pagoDepois) * h) : null,
     entregue_em: entregueDepois != null ? iso(base - (ago - entregueDepois) * h) : null, atualizado_por: por || null,
   });
-  const docs = [
+  const quantas = Number((location.hash.match(/^#demo=(\d+)/) || [])[1] || 0);
+  const docs = quantas ? Array.from({ length: quantas }, (_, i) => {
+    const n = i + 1, st = ["aguardando_pagamento", "paga", "entregue", "cancelada"][n % 4];
+    return mk(n, `Jogador ${n}`, `jogador${n}#${String(n % 10000).padStart(4, "0")}`, String(1100000000000000000 + n),
+      [["Escolhidos dos Mares", (n % 5) + 1], ["Super Tesouro", (n % 3) + 1]], 500 * ((n % 5) + 1) + 2000 * ((n % 3) + 1), st, n % 400,
+      st === "paga" || st === "entregue" ? 0.5 : null, st === "entregue" ? 1 : null, st === "aguardando_pagamento" ? null : "Staff (1)");
+  }).map((d) => ({ id: String(d.id).padStart(2, "0"), data: () => d })) : [
     mk(1, "Percy 🤡", "percy#0", "1100000000000000001", [["Escolhidos dos Mares", 2], ["Renascimento", 1]], 2500, "entregue", 130, 2, 5, "Ana (Moderação) (11)"),
     mk(2, "=SOMA(1+1)", "=hack#0", "1100000000000000002", [["Token de Segunda Chance", 3]], 1500, "cancelada", 100, null, null, "Ana (Moderação) (11)"),
     mk(3, "Zoro <img src=x onerror=alert(1)>", "zoro#1234", "1100000000000000003", [["Super Tesouro", 1], ["Caçador de Tesouros", 1], ["Rumores!", 2]], 4000, "paga", 52, 1, null, "Beto (Developer) (12)"),
@@ -445,7 +459,7 @@ function demo() {
 
 // ---------- Firebase ----------
 async function iniciar() {
-  if (location.hash === "#demo") return demo();
+  if (/^#demo(=\d+)?$/.test(location.hash)) return demo();
 
   const { firebaseConfig } = await import("./firebase-config.js");
   if (Object.values(firebaseConfig).some((v) => String(v).includes("COLE_AQUI"))) {

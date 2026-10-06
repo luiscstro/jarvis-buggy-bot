@@ -32,3 +32,7 @@ LEIA_ME.md
 dashboard/
 tools/
 firestore.rules
+backups/
+tests/
+pytest.ini
+requirements-dev.txt
