@@ -1,0 +1,6 @@
+# Só para desenvolvimento e testes (NÃO é necessário para rodar o bot na Discloud).
+#   pip install -r requirements.txt -r requirements-dev.txt
+pytest>=8
+bandit>=1.7            # análise estática de segurança do código
+pip-audit>=2.7         # procura vulnerabilidades conhecidas nas dependências
+opencv-python-headless # lê o QR Code do PIX nos testes (opcional: o teste é pulado sem ele)

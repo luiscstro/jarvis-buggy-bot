@@ -12,6 +12,10 @@ de vez fica guardado e é reenviado a cada 5 minutos (ou na próxima gravação 
 Ao iniciar, o bot junta o que está no Firebase com o arquivo local (vale o registro
 mais recente de cada pedido), então nada se perde se um dos dois estiver defasado.
 
+Exceção: se o banco foi zerado de propósito (tools/limpar_banco.py), ele ganha uma nova
+"época". Quem tem o arquivo local de outra época o descarta e passa a valer só o Firebase;
+sem isso, o arquivo antigo do servidor ressuscitaria os dados apagados.
+
 Credenciais (service account do Firebase), em ordem de prioridade:
   1. FIREBASE_CREDENTIALS_BASE64  — conteúdo do .json em base64, numa linha do .env
   2. FIREBASE_CREDENTIALS_FILE    — caminho do .json (padrão: firebase-credentials.json)
@@ -239,6 +243,11 @@ class Armazenamento:
             return
         self.firebase_ok_na_partida = True
 
+        epoca_r = meta_r.get("epoca")
+        if epoca_r and epoca_r != self.dados.get("epoca"):
+            self._adotar_firebase(meta_r, pedidos_r, epoca_r)
+            return
+
         locais = self.dados["pedidos"]
         for chave, remoto in pedidos_r.items():
             local = locais.get(chave)
@@ -259,11 +268,28 @@ class Armazenamento:
         self._salvar_local()
         print(f"[Loja] Firebase conectado: {len(locais)} pedido(s), último ID {self.dados['ultimo_id']:02d}.")
 
+    def _adotar_firebase(self, meta_r: dict, pedidos_r: dict, epoca: str):
+        """O banco foi zerado (outra época): descarta o arquivo local e fica só com o Firebase."""
+        descartados = len(self.dados["pedidos"])
+        for chave, pedido in pedidos_r.items():
+            completar_pedido(pedido, chave)
+        self.dados = {
+            "ultimo_id": max([meta_r.get("ultimo_id", 0)] + [int(c) for c in pedidos_r]),
+            "pedidos": pedidos_r,
+            "dashboard": meta_r.get("dashboard"),
+            "epoca": epoca,
+        }
+        self._salvar_local()
+        print(
+            f"[Loja] O banco foi zerado (nova época). Descartei {descartados} pedido(s) do arquivo local; "
+            f"valem os {len(pedidos_r)} do Firebase."
+        )
+
     # ---------- gravação ----------
     def _salvar_local(self):
         tmp = self.caminho + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(self.dados, f, ensure_ascii=False, indent=2)
+            json.dump(self.dados, f, ensure_ascii=False, separators=(",", ":"))
         os.replace(tmp, self.caminho)
 
     def _enviar_pedido(self, chave: str):
@@ -275,6 +301,7 @@ class Armazenamento:
             self.sincronizador.enviar("meta", DOC_META, {
                 "ultimo_id": self.dados["ultimo_id"],
                 "dashboard": self.dados["dashboard"],
+                "epoca": self.dados.get("epoca"),
                 "atualizado_em": agora_iso(),
             })
 

@@ -33,3 +33,9 @@ store_data.json.tmp
 modelo.py
 ajuda.py
 LEIA_ME.md
+
+# Backups gerados por tools/limpar_banco.py (contêm dados de compradores)
+backups/
+
+# Testes
+.pytest_cache/

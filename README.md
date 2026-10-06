@@ -158,6 +158,40 @@ Configuração (no `.env`):
 
 O bot precisa da permissão **Gerenciar Canais**. Os itens e preços ficam em `loja.py` (`PAGINAS`). O contador de compras fica em `store_data.json`.
 
+## 🧪 Testes
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest tests                         # tudo que roda offline: unitários, segurança, carga e painel no Chrome
+RUN_INTEGRATION=1 python -m pytest tests       # inclui os testes contra o Firebase REAL
+python -m pytest tests -m "not browser"        # sem abrir o Chrome
+python -m pytest tests/test_carga.py -s        # pico de uso, mostrando os números medidos
+python -m bandit -r bot.py loja.py loja_dados.py pix.py tools    # análise estática de segurança
+python -m pip_audit -r requirements.txt                          # vulnerabilidades conhecidas nas dependências
+```
+
+| Arquivo | O que cobre |
+|---|---|
+| `tests/test_pix.py` | CRC, valor embutido, estrutura do código e leitura do QR Code |
+| `tests/test_loja_unit.py` | preços, catálogo, carrinho, janela de quantidades e limites do Discord |
+| `tests/test_dados.py` | armazenamento, Firebase (falso), conflitos, falhas, pedidos antigos e "época" |
+| `tests/test_fluxo.py` | compra, canal privado, botões da staff, limite por pessoa e comandos |
+| `tests/test_seguranca.py` | permissões, e-mails maliciosos, vazamento de segredos, regras e painel |
+| `tests/test_carga.py` | pico de uso: 200 compras simultâneas, cliques repetidos, volume de dados |
+| `tests/test_painel_web.py` | o painel no Chrome: injeção de código, CSV, filtros, celular e 20 mil compras |
+| `tests/test_integracao.py` | Firebase real: ciclo completo, carga, regras com usuários reais |
+
+Os testes normais **nunca** falam com o Firebase real nem leem o seu `.env` (o Firebase é simulado). Os de integração só rodam com `RUN_INTEGRATION=1`, usam coleções de teste (`teste_*`) e apagam tudo o que criam.
+
+## 🧹 Limpar o banco (tirar compras de teste)
+
+```bash
+python tools/limpar_banco.py              # só MOSTRA o que seria apagado
+python tools/limpar_banco.py --confirmar  # faz backup em backups/ e apaga
+```
+
+Apaga os pedidos e zera o contador (a próxima compra volta a ser a `01`). Não mexe nos e-mails autorizados do painel nem nos usuários do login. O banco ganha uma nova "época": quando o bot reiniciar, ele descarta o `store_data.json` antigo do servidor e passa a valer só o Firebase, então os pedidos apagados **não voltam**. Apague também, no Discord, os canais das compras de teste.
+
 ---
 
 ## 🌐 Rodar 24/7 (Opcional)

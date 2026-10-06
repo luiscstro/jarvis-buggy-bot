@@ -24,6 +24,8 @@ def _ler_campos(payload: str) -> list[tuple[str, str]]:
     campos, i = [], 0
     while i < len(payload):
         id_, tam = payload[i:i + 2], int(payload[i + 2:i + 4])
+        if i + 4 + tam > len(payload):
+            raise ValueError("campo maior que o código")
         campos.append((id_, payload[i + 4:i + 4 + tam]))
         i += 4 + tam
     return campos
@@ -42,7 +44,10 @@ def payload_valido(payload: str) -> bool:
 
 def beneficiario(payload: str) -> str:
     """Nome do recebedor (campo 59) para o comprador conferir antes de pagar."""
-    return dict(_ler_campos(payload)).get("59", "")
+    try:
+        return dict(_ler_campos(payload)).get("59", "")
+    except ValueError:
+        return ""
 
 
 def payload_com_valor(payload: str, centavos: int) -> str:

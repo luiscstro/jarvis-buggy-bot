@@ -39,7 +39,14 @@ LOJA_CATEGORIA_ID = int(os.getenv("LOJA_CATEGORIA_ID", "0") or 0)
 LOJA_CARGO_ALERTA_ID = int(os.getenv("LOJA_CARGO_ALERTA_ID", "1222232432527413389") or 0)
 
 LOJA_ARQUIVO = "store_data.json"
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Quantas compras aguardando pagamento cada pessoa pode ter ao mesmo tempo (0 = sem limite).
+# Evita que alguém encha o servidor de canais abrindo compras em sequência.
+LOJA_MAX_ABERTAS = int(os.getenv("LOJA_MAX_ABERTAS", "3") or 0)
+# E-mail "normal" e estrito: o endereço vira o nome de um documento no banco, então nada de "/", ".." ou aspas.
+EMAIL_RE = re.compile(
+    r"^(?=.{3,254}$)(?!.*\.\.)[a-z0-9][a-z0-9._%+'\-]{0,63}@"
+    r"(?:[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$"
+)
 
 # PIX copia e cola da conta que recebe os pagamentos (guarde no .env, nunca no código).
 # O bot embute o valor de cada compra e gera o QR Code a partir dele.
@@ -595,6 +602,7 @@ class LojaCog(commands.Cog):
         await interaction.response.defer()
         guild = interaction.guild
         membro = interaction.user
+
         carrinho = dict(view.carrinho)
         total = total_carrinho(carrinho)
 
@@ -622,6 +630,20 @@ class LojaCog(commands.Cog):
             categoria = None
 
         async with self.lock:
+            # A contagem precisa ficar DENTRO da trava: fora dela, vários pedidos da mesma pessoa
+            # chegando juntos passariam todos pela checagem antes de qualquer um ser registrado.
+            abertas = sum(
+                1 for p in self.armazenamento.dados["pedidos"].values()
+                if p.get("usuario_id") == membro.id and p.get("status") == "aguardando_pagamento" and not p.get("fechado_em")
+            )
+            if LOJA_MAX_ABERTAS and abertas >= LOJA_MAX_ABERTAS:
+                view.finalizando = False
+                await interaction.followup.send(
+                    f"⚠️ Você já tem **{abertas}** compra(s) aguardando pagamento (o limite é {LOJA_MAX_ABERTAS}). "
+                    "Conclua uma delas, ou peça à staff para fechá-la, antes de abrir outra.",
+                    ephemeral=True,
+                )
+                return
             compra_id = self.armazenamento.proximo_id()
             nome_canal = f"{slug_nick(membro.display_name)}-{compra_id:02d}"
             try:
