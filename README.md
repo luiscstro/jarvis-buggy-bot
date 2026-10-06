@@ -110,14 +110,33 @@ Para entrar no **modo admin**, use o prefixo `admin:` após a menção:
 3. O bot cria um canal privado `<nick>-<id da compra>` (ex.: `percy-01`) com o jogador, o bot e a staff, com o resumo e o total.
 4. No canal vão o resumo, o total e o **PIX** (QR Code + copia e cola) já com o valor da compra. O jogador paga e envia o comprovante ali mesmo.
 5. A staff usa os botões do canal: **Marcar como pago**, **Marcar como entregue** e **Fechar compra** (fechar sem pagar marca como cancelada e apaga o canal).
+6. Tudo aparece no painel de compras (site externo, abaixo).
 
-### Painel de compras ao vivo (staff)
+### Painel de compras (site externo, ao vivo)
 
-`buggy!loja_dashboard` (ou `buggy!loja_dashboard #canal`) posta uma mensagem que o bot atualiza sozinho a cada compra ou mudança de status. Use um canal **só da staff**.
+Um site que mostra todas as compras em tempo real, **fora do Discord**: https://buggy-loja.web.app
 
-- Mostra data, nome, usuário, ID do usuário, itens, total, status e o canal de cada compra, mais o resumo (faturamento confirmado, aguardando pagamento, pagas, entregues, canceladas).
-- Botões: página anterior/próxima, **Atualizar** e **Exportar CSV** (todas as compras, abre direto no Excel).
-- Só existe um painel por vez: rodar o comando de novo move o painel.
+- Resumo (faturamento confirmado, aguardando pagamento, pagas, entregues, canceladas), gráfico dos últimos 14 dias e a lista completa com data, nome, usuário, **ID do usuário**, itens, total, status, datas de pagamento/entrega e responsável.
+- Busca, filtros por status e período, ordenação, botão de copiar ID e **Exportar CSV** (abre no Excel). Funciona no celular.
+- Atualiza sozinho quando entra uma compra ou muda um status (sem recarregar a página).
+- Para ver como fica sem login, abra o endereço com `#demo` no final (dados fictícios).
+
+**Quem pode entrar:** só contas Google autorizadas, o que se controla pelo Discord (staff):
+- `buggy!loja_acesso adicionar fulano@gmail.com` — autoriza (use o e-mail da conta Google do login)
+- `buggy!loja_acesso remover fulano@gmail.com` — tira o acesso
+- `buggy!loja_acesso listar` — mostra quem tem acesso
+
+A proteção é dupla: o login do Google e as regras do Firestore (`firestore.rules`) só liberam a leitura para e-mails autorizados e nunca permitem escrita pelo navegador.
+
+**Publicar/atualizar o site** (depois de mexer em `dashboard/` ou `firestore.rules`), na pasta do bot:
+
+```bash
+python tools/deploy_firebase.py             # app web + regras + site
+python tools/deploy_firebase.py --so-site   # só a página
+python tools/deploy_firebase.py --so-regras # só as regras de segurança
+```
+
+O comando usa o mesmo `firebase-credentials.json` do bot; não precisa instalar o firebase-tools.
 
 ### Onde os dados ficam (Firebase)
 

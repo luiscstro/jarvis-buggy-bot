@@ -1392,7 +1392,7 @@ def _build_full_help_embed(ctx: commands.Context = None) -> discord.Embed:
         name="🛒 Loja (staff)",
         value=(
             "`buggy!loja_painel [#canal]` — Posta o painel da loja (botão \"Abrir loja\")\n"
-            "`buggy!loja_dashboard [#canal]` — Posta o painel de compras ao vivo\n"
+            "`buggy!loja_acesso <listar|adicionar|remover> [email]` — Quem entra no painel web de compras\n"
             "`buggy!loja_armazenamento` — Mostra se os pedidos estão salvos no Firebase"
         ),
         inline=False

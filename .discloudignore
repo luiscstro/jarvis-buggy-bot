@@ -27,3 +27,8 @@ LEIA_ME.md
 # Arquivos temporários e logs
 *.log
 *.tmp
+
+# Painel web e ferramentas de publicação (rodam no seu PC, não no bot)
+dashboard/
+tools/
+firestore.rules

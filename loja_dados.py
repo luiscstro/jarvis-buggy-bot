@@ -30,6 +30,7 @@ import asyncio
 
 COLECAO_PEDIDOS = "loja_pedidos"
 COLECAO_META = "loja_meta"
+COLECAO_STAFF = "loja_staff"  # e-mails autorizados a abrir o painel web (id do documento = e-mail)
 DOC_META = "estado"
 TENTATIVAS = 4
 INTERVALO_REENVIO = 300  # segundos entre reenvios do que falhou
@@ -92,6 +93,21 @@ class FirestoreRemoto:
         meta = doc.to_dict() if doc.exists else {}
         pedidos = {d.id: d.to_dict() for d in self.cliente.collection(COLECAO_PEDIDOS).stream()}
         return meta or {}, pedidos
+
+    # ---------- acesso ao painel web ----------
+    def listar_staff(self) -> list[str]:
+        return sorted(d.id for d in self.cliente.collection(COLECAO_STAFF).stream())
+
+    def adicionar_staff(self, email: str, por: str):
+        self.cliente.collection(COLECAO_STAFF).document(email).set(
+            {"email": email, "adicionado_por": por, "adicionado_em": agora_iso()}
+        )
+
+    def remover_staff(self, email: str) -> bool:
+        doc = self.cliente.collection(COLECAO_STAFF).document(email)
+        existia = doc.get().exists
+        doc.delete()
+        return existia
 
     def salvar(self, tipo: str, chave: str, dados: dict):
         if tipo == "pedido":
@@ -165,6 +181,24 @@ def _atualizado(pedido: dict) -> str:
     return pedido.get("atualizado_em") or pedido.get("criado_em") or ""
 
 
+def completar_pedido(pedido: dict, chave: str) -> bool:
+    """Preenche os campos que pedidos de versões antigas não tinham (status, nome, datas...).
+
+    Devolve True se mudou alguma coisa. Sem isso, os botões da staff quebrariam em pedidos
+    antigos, que só tinham canal, itens, total e usuário.
+    """
+    padroes = {
+        "id": int(chave), "nome": pedido.get("usuario", ""), "status": "aguardando_pagamento",
+        "pago_em": None, "entregue_em": None, "fechado_em": None, "atualizado_por": None,
+    }
+    mudou = False
+    for campo, valor in padroes.items():
+        if campo not in pedido:
+            pedido[campo] = valor
+            mudou = True
+    return mudou
+
+
 class Armazenamento:
     """Contador de compras e histórico de pedidos."""
 
@@ -185,7 +219,14 @@ class Armazenamento:
         armazenamento = cls(caminho, remoto)
         if remoto:
             await asyncio.to_thread(armazenamento.sincronizar_inicio)
+        else:
+            armazenamento.completar_locais()
         return armazenamento
+
+    def completar_locais(self):
+        """Completa pedidos antigos do arquivo local (quando não há Firebase para sincronizar)."""
+        if any([completar_pedido(p, c) for c, p in self.dados["pedidos"].items()]):
+            self._salvar_local()
 
     # ---------- sincronização na partida ----------
     def sincronizar_inicio(self):
@@ -203,9 +244,10 @@ class Armazenamento:
             local = locais.get(chave)
             if local is None or _atualizado(remoto) > _atualizado(local):
                 locais[chave] = remoto
+        completados = {c for c, p in locais.items() if completar_pedido(p, c)}  # pedidos de versões antigas
         for chave, local in locais.items():
             remoto = pedidos_r.get(chave)
-            if remoto is None or _atualizado(local) > _atualizado(remoto):
+            if chave in completados or remoto is None or _atualizado(local) > _atualizado(remoto):
                 self.sincronizador.enviar("pedido", chave, local)
 
         maior_id = max([int(c) for c in locais] + [0])
