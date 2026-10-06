@@ -93,6 +93,14 @@ def test_erro_http_generico_tambem_cai_no_plano_b(cog):
     assert canal.send.await_count == 2
 
 
+def test_se_o_qr_nao_puder_ser_gerado_o_ticket_avisa_e_mantem_a_chave(cog, monkeypatch):
+    monkeypatch.setattr(loja.pix, "qr_png", MagicMock(side_effect=RuntimeError("sem biblioteca de imagem")))
+    _, canal = run(comprar(cog, membro(8), {"aviso": 1}))
+    kw = canal.send.call_args.kwargs
+    assert not kw["files"] and kw["embeds"][1].image.url is None
+    assert "Não consegui gerar o QR Code" in kw["embeds"][1].description and "```" in kw["embeds"][1].fields[1].value
+
+
 def test_sem_pix_o_ticket_avisa_que_a_staff_envia_os_dados(cog, monkeypatch):
     monkeypatch.setattr(loja, "PIX_COPIA_COLA", "")
     _, canal = run(comprar(cog, membro(6), {"aviso": 1}))
@@ -104,6 +112,10 @@ def test_sem_pix_o_ticket_avisa_que_a_staff_envia_os_dados(cog, monkeypatch):
 # ---------------------------------------------------------------- diagnóstico para a staff
 def test_diagnostico_do_pix(monkeypatch):
     assert "PIX ativo" in loja.LojaCog._diagnostico_pix()[0] and "Loja de Teste" in loja.LojaCog._diagnostico_pix()[0]
+    assert "QR Code gerando normalmente" in loja.LojaCog._diagnostico_pix()[1]
+    monkeypatch.setattr(loja.pix, "qr_png", MagicMock(side_effect=ModuleNotFoundError("No module named 'PIL'")))
+    assert "NÃO está sendo gerado" in loja.LojaCog._diagnostico_pix()[1] and "PIL" in loja.LojaCog._diagnostico_pix()[1]
+    monkeypatch.undo()
     monkeypatch.setattr(loja, "PIX_COPIA_COLA", ""); monkeypatch.setattr(loja, "PIX_MOTIVO", "ausente")
     assert "não chegou ao bot" in loja.LojaCog._diagnostico_pix()[0]
     monkeypatch.setattr(loja, "PIX_MOTIVO", "invalido")

@@ -1,5 +1,5 @@
 discord.py>=2.3.0
 aiohttp>=3.9.0
 python-dotenv
-qrcode[pil]>=7.4
+qrcode>=7.4
 google-cloud-firestore>=2.16
