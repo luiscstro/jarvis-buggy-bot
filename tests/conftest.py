@@ -67,6 +67,7 @@ class _DocRef:
         if self.bd.latencia:
             time.sleep(self.bd.latencia)
         self.bd.cols.setdefault(self.col, {})[self.id] = copy.deepcopy(dados)
+        self.bd._notificar(self.col)
 
     def get(self):
         self.bd._checar("leitura")
@@ -75,18 +76,39 @@ class _DocRef:
     def delete(self):
         self.bd._checar("escrita")
         self.bd.cols.get(self.col, {}).pop(self.id, None)
+        self.bd._notificar(self.col)
+
+
+class _Escuta:
+    def __init__(self, bd, nome, callback):
+        self.bd, self.nome, self.callback = bd, nome, callback
+
+    def unsubscribe(self):
+        if (self.nome, self.callback) in self.bd.escutas:
+            self.bd.escutas.remove((self.nome, self.callback))
 
 
 class _ColRef:
-    def __init__(self, bd, nome):
-        self.bd, self.nome = bd, nome
+    def __init__(self, bd, nome, limite=None):
+        self.bd, self.nome, self.limite = bd, nome, limite
 
     def document(self, id_):
         return _DocRef(self.bd, self.nome, id_)
 
+    def limit(self, n):
+        return _ColRef(self.bd, self.nome, n)
+
     def stream(self):
         self.bd._checar("leitura")
-        return [_Doc(i, d) for i, d in self.bd.cols.get(self.nome, {}).items()]
+        docs = [_Doc(i, d) for i, d in self.bd.cols.get(self.nome, {}).items()]
+        return docs[:self.limite] if self.limite else docs
+
+    def on_snapshot(self, callback):
+        """Como o cliente real: entrega o estado atual de imediato e de novo a cada mudança."""
+        self.bd._checar("leitura")
+        self.bd.escutas.append((self.nome, callback))
+        callback([_Doc(i, d) for i, d in self.bd.cols.get(self.nome, {}).items()], [], None)
+        return _Escuta(self.bd, self.nome, callback)
 
 
 class FakeFirestore:
@@ -98,6 +120,12 @@ class FakeFirestore:
         self.falhas = 0         # as próximas N escritas falham
         self.latencia = 0.0     # segundos por escrita
         self.escritas = 0
+        self.escutas: list = []  # (coleção, callback) de quem usou on_snapshot
+
+    def _notificar(self, colecao):
+        for nome, cb in list(self.escutas):
+            if nome == colecao:
+                cb([_Doc(i, d) for i, d in self.cols.get(colecao, {}).items()], [], None)
 
     def _checar(self, tipo):
         if self.fora or (tipo == "escrita" and self.falhas > 0):
@@ -280,3 +308,12 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(sem_integracao)
         if "browser" in item.keywords and not _tem_navegador():
             item.add_marker(sem_navegador)
+
+
+@pytest.fixture(autouse=True)
+def catalogo_padrao_restaurado():
+    """Cada teste começa (e termina) com o catálogo padrão, mesmo que ele troque o catálogo em uso."""
+    import catalogo
+    loja.aplicar_catalogo(*catalogo.catalogo_padrao(), "padrao")
+    yield
+    loja.aplicar_catalogo(*catalogo.catalogo_padrao(), "padrao")

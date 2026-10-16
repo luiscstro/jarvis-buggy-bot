@@ -153,7 +153,7 @@ def test_acessibilidade_basica(site, tmp_path):
              idsDuplicados: ids.length - new Set(ids).size, titulo: document.title, svgRole: document.getElementById('chart').getAttribute('role'), viewport: !!document.querySelector('meta[name=viewport]') };
     """
     r = abrir(site + "#demo", js, tmp_path)["resultado"]
-    assert r == {"lang": "pt-BR", "botoesSemNome": 0, "inputsSemRotulo": 0, "idsDuplicados": 0, "titulo": "Painel de Compras", "svgRole": "img", "viewport": True}
+    assert r == {"lang": "pt-BR", "botoesSemNome": 0, "inputsSemRotulo": 0, "idsDuplicados": 0, "titulo": "Painel da Loja", "svgRole": "img", "viewport": True}
 
 
 def test_sem_configuracao_o_painel_explica_o_que_fazer(tmp_path):

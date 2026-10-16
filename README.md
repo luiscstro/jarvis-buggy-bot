@@ -138,6 +138,32 @@ python tools/deploy_firebase.py --so-regras # só as regras de segurança
 
 O comando usa o mesmo `firebase-credentials.json` do bot; não precisa instalar o firebase-tools.
 
+### Editar a loja pelo painel (aba "🛠️ Loja")
+
+A aba **Loja** do painel (https://buggy-loja.web.app) edita o catálogo da loja do Discord: **preço, nome, descrição, adicionar, excluir, ocultar, reordenar e o texto de cada página**. O bot acompanha o Firebase ao vivo, então a mudança aparece na loja do Discord em poucos segundos, sem reiniciar nada.
+
+- **Itens:** nome (até 60 caracteres), preço (R$ 0,01 a R$ 10.000,00; aceita `5`, `12,50`, `1.234,56`), descrição (até 1500 caracteres, com a formatação do Discord) e página. O título de cada item (`## 🔷 Nome - R$ 5,00`) é montado sozinho a partir do nome e do preço: **não repita na descrição**. A janela mostra uma prévia do texto exato que vai para o Discord.
+- **Ocultar** tira da loja sem apagar (dá para trazer de volta); **excluir** apaga de vez (as compras antigas continuam no histórico, com o nome e o preço da época).
+- **Páginas:** até 5, com um texto de introdução opcional. Só dá para excluir página vazia.
+- **Limites do Discord, avisados antes de salvar:** 25 itens visíveis no total e 4000 caracteres por página.
+- **Histórico:** toda alteração fica registrada (quem, quando, o que mudou) e ninguém consegue editar nem apagar esse histórico.
+
+**Quem pode editar** é decidido no Discord, pela staff, em dois níveis:
+
+| Comando | Efeito |
+|---|---|
+| `buggy!loja_acesso adicionar fulano@gmail.com` | entra no painel, **só visualiza** |
+| `buggy!loja_acesso editor fulano@gmail.com` | entra e **edita o catálogo** |
+| `buggy!loja_acesso visualizar fulano@gmail.com` | volta a só visualizar |
+| `buggy!loja_acesso remover fulano@gmail.com` | tira o acesso |
+| `buggy!loja_acesso listar` | mostra quem tem acesso e o nível (✏️ edita, 👁️ só vê) |
+
+**Segurança:** as regras do banco (`firestore.rules`) validam cada gravação (tipos, tamanhos, preço, página) e carimbam o e-mail de quem editou e a hora do servidor, então nem uma página adulterada consegue gravar lixo ou se passar por outra pessoa. Quem não é editor não grava nada, mesmo burlando a interface.
+
+**Compras e preços:** se a staff muda um preço enquanto alguém está com o carrinho aberto, a compra é **pausada** e a pessoa vê o novo valor antes de finalizar: nunca se cobra um preço que ela não viu. Cada pedido guarda o nome e o preço do momento da compra.
+
+**Primeira vez:** o catálogo atual (12 itens em 3 páginas) fica em `catalogo_padrao.py`. O bot o envia ao Firebase sozinho na primeira inicialização (ou rode `python tools/semear_catalogo.py`); depois disso quem manda é o Firebase. Se o Firebase estiver fora do ar na partida, o bot usa a última cópia local (`catalogo_cache.json`) e, sem ela, o catálogo padrão.
+
 ### Onde os dados ficam (Firebase)
 
 Os pedidos são salvos no **Firebase Firestore** (plano gratuito Spark), com uma cópia em `store_data.json`. Assim o histórico sobrevive a redeploys da hospedagem. Se o Firebase falhar, a compra continua normalmente: o bot guarda no arquivo local e reenvia sozinho (a cada 5 minutos) quando o Firebase voltar. Ao iniciar, ele junta as duas cópias e vale o registro mais recente de cada pedido.
@@ -179,7 +205,11 @@ python -m pip_audit -r requirements.txt                          # vulnerabilida
 | `tests/test_seguranca.py` | permissões, e-mails maliciosos, vazamento de segredos, regras e painel |
 | `tests/test_carga.py` | pico de uso: 200 compras simultâneas, cliques repetidos, volume de dados |
 | `tests/test_painel_web.py` | o painel no Chrome: injeção de código, CSV, filtros, celular e 20 mil compras |
+| `tests/test_catalogo.py` | catálogo: validação de documentos, montagem das páginas, semeadura e sincronização ao vivo |
+| `tests/test_catalogo_loja.py` | a loja do Discord com o catálogo mudando: telas, checkout seguro, concorrência, níveis de acesso |
+| `tests/test_editor_catalogo.py` | a aba de edição no Chrome (demonstração): criar, editar, mover, excluir, limites, só-visualização |
 | `tests/test_integracao.py` | Firebase real: ciclo completo, carga, regras com usuários reais |
+| `tests/test_editor_e2e_real.py` | o painel no Chrome logado como editor, contra o Firebase real |
 
 Os testes normais **nunca** falam com o Firebase real nem leem o seu `.env` (o Firebase é simulado). Os de integração só rodam com `RUN_INTEGRATION=1`, usam coleções de teste (`teste_*`) e apagam tudo o que criam.
 

@@ -189,9 +189,34 @@ def test_regras_exigem_email_verificado_e_estar_na_lista():
         assert "allow read: if eStaff()" in bloco and "allow write: if false" in bloco
 
 
-def test_regras_nao_expoem_a_lista_de_emails():
+def test_cada_pessoa_le_so_o_proprio_registro_de_acesso_e_a_lista_fica_fechada():
     r = _regras()
-    assert "match /loja_staff" not in r            # cai na regra "tudo fechado"
+    bloco = re.search(r"match /loja_staff/\{email\} \{(.*?)\n    \}", r, re.S).group(1)
+    assert "allow get: if verificado() && emailDe() == email;" in bloco     # só o próprio documento
+    assert "allow list, write: if false;" in bloco                         # a lista e a escrita ficam fechadas
+
+
+def test_toda_permissao_de_escrita_exige_editor_ou_e_negada():
+    """Nenhuma regra libera create/update/delete/write para quem é só staff, logado ou anônimo."""
+    r = _regras()
+    for verbos, condicao in re.findall(r"allow\s+([a-z, ]+):\s*if\s+([^;]+);", r):
+        escreve = set(re.split(r",\s*", verbos.strip())) & {"write", "create", "update", "delete"}
+        if escreve:
+            assert condicao.strip() == "false" or condicao.strip().startswith("eEditor()"), f"{verbos}: {condicao}"
+    assert "allow write: if false" in r                                     # pedidos e estado: nem editor escreve
+
+
+def test_regras_validam_cada_campo_do_catalogo():
+    r = _regras()
+    for trecho in ("d.preco_centavos is int", "d.preco_centavos >= 1", "d.preco_centavos <= 1000000", "d.nome.size() <= 60",
+                   "d.descricao.size() <= 1500", "d.introducao.size() <= 1500", "d.atualizado_por == emailDe()",
+                   "d.atualizado_em == request.time", ".hasOnly([", ".hasAll([", "d.ativo is bool", "d.pagina.matches('^p[1-5]$')"):
+        assert trecho in r, trecho
+
+
+def test_historico_de_alteracoes_so_se_acrescenta():
+    bloco = re.search(r"match /loja_catalogo_log/\{id\} \{(.*?)\n    \}", _regras(), re.S).group(1)
+    assert "allow update, delete: if false;" in bloco and "allow create: if eEditor() && logValido();" in bloco
 
 
 # ---------------------------------------------------------------- painel web (análise estática)
@@ -199,18 +224,32 @@ def _html():
     return (RAIZ / "dashboard" / "index.html").read_text(encoding="utf-8")
 
 
+def _arquivos_do_painel():
+    return [f for f in (RAIZ / "dashboard").rglob("*") if f.suffix in (".html", ".js", ".css")]
+
+
 def test_painel_nunca_injeta_dados_como_html():
-    h = _html()
-    for perigoso in (".innerHTML", ".outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "srcdoc"):
-        assert perigoso not in h, perigoso
+    """Vale para TODOS os arquivos do painel (index.html e editor.js): dados do banco entram só como texto."""
+    arquivos = _arquivos_do_painel()
+    assert {f.name for f in arquivos} >= {"index.html", "editor.js", "firebase-config.js", "editor.css"}
+    for arq in arquivos:
+        texto = arq.read_text(encoding="utf-8")
+        for perigoso in (".innerHTML", ".outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "srcdoc", "javascript:", "setAttribute(\"on", "setAttribute('on"):
+            assert perigoso not in texto, f"{perigoso} em {arq.name}"
 
 
 def test_painel_nao_carrega_scripts_de_terceiros_alem_do_firebase():
-    h = _html()
-    origens = set(re.findall(r"https?://[a-z0-9.\-]+", h))
     permitidas = {"https://www.gstatic.com", "http://www.w3.org"}
-    assert origens <= permitidas, origens - permitidas
-    assert 'name="robots" content="noindex' in h
+    for arq in _arquivos_do_painel():
+        origens = set(re.findall(r"https?://[a-z0-9.\-]+", arq.read_text(encoding="utf-8")))
+        assert origens <= permitidas, (arq.name, origens - permitidas)
+    assert 'name="robots" content="noindex' in _html()
+
+
+def test_painel_so_importa_modulos_proprios_ou_do_firebase():
+    for arq in _arquivos_do_painel():
+        for destino in re.findall(r"import\s*\(?\s*[^;\n]*?[\"'](\.{0,2}/[^\"']+|https?://[^\"']+)[\"']", arq.read_text(encoding="utf-8")):
+            assert destino.startswith("./") or destino.startswith("https://www.gstatic.com/firebasejs/"), (arq.name, destino)
 
 
 def test_painel_nao_tem_credencial_privada():

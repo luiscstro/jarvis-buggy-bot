@@ -2,31 +2,108 @@ rules_version = '2';
 
 // Regras de segurança do Firestore da loja.
 //
-// - O bot grava com credenciais de administrador (service account), que ignoram estas regras.
-// - O painel web (pasta dashboard/) lê pelo navegador, então precisa destas regras:
-//   só entra quem fez login com uma conta Google de e-mail verificado que esteja na
-//   coleção `loja_staff` (gerida pelo comando `buggy!loja_acesso` no Discord).
-// - Ninguém escreve pelo navegador.
+// Quem é quem
+//   - O BOT grava com credenciais de administrador (service account), que ignoram estas regras.
+//   - O PAINEL WEB (pasta dashboard/) fala direto com o banco pelo navegador, então tudo aqui vale para ele.
+//   - "staff": login com Google (e-mail verificado) cujo e-mail está em `loja_staff` (comando `buggy!loja_acesso`).
+//   - "editor": staff com `editor: true` no próprio registro. Só editor mexe no catálogo.
+//
+// O que cada um pode
+//   - staff lê pedidos, o catálogo e o histórico de alterações; NINGUÉM escreve pedidos pelo navegador;
+//   - editor cria/edita/exclui itens e páginas do catálogo, com todos os campos validados aqui (tipo,
+//     tamanho, preço entre R$ 0,01 e R$ 10.000,00) e carimbados com o PRÓPRIO e-mail e a hora do servidor;
+//   - toda alteração do catálogo gera um registro no histórico, que ninguém consegue editar nem apagar;
+//   - cada pessoa lê só o PRÓPRIO registro de acesso (para o painel saber se pode editar); a lista fica fechada.
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function verificado() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+    function emailDe() {
+      return request.auth.token.email.lower();
+    }
     function eStaff() {
-      return request.auth != null
-        && request.auth.token.email_verified == true
-        && exists(/databases/$(database)/documents/loja_staff/$(request.auth.token.email.lower()));
+      return verificado() && exists(/databases/$(database)/documents/loja_staff/$(emailDe()));
+    }
+    function eEditor() {
+      return eStaff()
+        && get(/databases/$(database)/documents/loja_staff/$(emailDe())).data.get('editor', false) == true;
     }
 
+    // ------------------------------------------------------------ pedidos e estado: só leitura para a staff
     match /loja_pedidos/{id} {
       allow read: if eStaff();
       allow write: if false;
     }
-
     match /loja_meta/{id} {
       allow read: if eStaff();
       allow write: if false;
     }
 
-    // Todo o resto (inclusive loja_staff) fica fechado para o navegador.
+    // ------------------------------------------------------------ cada pessoa lê só o PRÓPRIO registro de acesso
+    match /loja_staff/{email} {
+      allow get: if verificado() && emailDe() == email;
+      allow list, write: if false;
+    }
+
+    // ------------------------------------------------------------ catálogo
+    function itemValido(id) {
+      let d = request.resource.data;
+      return id.matches('^[a-z0-9][a-z0-9_-]{0,39}$')
+        && d.keys().hasOnly(['nome', 'preco_centavos', 'descricao', 'pagina', 'ordem', 'ativo', 'atualizado_por', 'atualizado_em'])
+        && d.keys().hasAll(['nome', 'preco_centavos', 'descricao', 'pagina', 'ordem', 'ativo', 'atualizado_por', 'atualizado_em'])
+        && d.nome is string && d.nome.size() >= 1 && d.nome.size() <= 60
+        && d.preco_centavos is int && d.preco_centavos >= 1 && d.preco_centavos <= 1000000
+        && d.descricao is string && d.descricao.size() <= 1500
+        && d.pagina is string && d.pagina.matches('^p[1-5]$')
+        && d.ordem is int && d.ordem >= 0 && d.ordem <= 9999
+        && d.ativo is bool
+        && d.atualizado_por == emailDe()
+        && d.atualizado_em == request.time;
+    }
+    match /loja_itens/{id} {
+      allow read: if eStaff();
+      allow create, update: if eEditor() && itemValido(id);
+      allow delete: if eEditor();
+    }
+
+    function paginaValida(id) {
+      let d = request.resource.data;
+      return id.matches('^p[1-5]$')
+        && d.keys().hasOnly(['introducao', 'ordem', 'atualizado_por', 'atualizado_em'])
+        && d.keys().hasAll(['introducao', 'ordem', 'atualizado_por', 'atualizado_em'])
+        && d.introducao is string && d.introducao.size() <= 1500
+        && d.ordem is int && d.ordem >= 0 && d.ordem <= 99
+        && d.atualizado_por == emailDe()
+        && d.atualizado_em == request.time;
+    }
+    match /loja_paginas/{id} {
+      allow read: if eStaff();
+      allow create, update: if eEditor() && paginaValida(id);
+      allow delete: if eEditor();
+    }
+
+    // ------------------------------------------------------------ histórico de alterações (só se acrescenta)
+    function logValido() {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['quando', 'quem', 'acao', 'alvo', 'resumo', 'antes', 'depois'])
+        && d.keys().hasAll(['quando', 'quem', 'acao', 'alvo', 'resumo'])
+        && d.quando == request.time
+        && d.quem == emailDe()
+        && d.acao in ['criar', 'editar', 'excluir', 'mover', 'pagina']
+        && d.alvo is string && d.alvo.size() <= 40
+        && d.resumo is string && d.resumo.size() <= 300
+        && (!('antes' in d) || (d.antes is map && d.antes.size() <= 10))
+        && (!('depois' in d) || (d.depois is map && d.depois.size() <= 10));
+    }
+    match /loja_catalogo_log/{id} {
+      allow read: if eStaff();
+      allow create: if eEditor() && logValido();
+      allow update, delete: if false;
+    }
+
+    // ------------------------------------------------------------ todo o resto fica fechado
     match /{document=**} {
       allow read, write: if false;
     }
