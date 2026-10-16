@@ -110,6 +110,34 @@ def test_zerar_o_banco_nao_ressuscita_arquivo_local_antigo(remoto, tmp_path):
     assert list(remoto.cliente.collection(ld.COLECAO_PEDIDOS).stream()) == []      # nada voltou para o banco
 
 
+def test_bot_rodando_percebe_o_reset_ao_vivo_no_firestore_real(remoto, tmp_path):
+    """O incidente real: zerar o banco com o bot rodando (e até com um bot desatualizado gravando) não pode ressuscitar nada."""
+    a = ld.Armazenamento(str(tmp_path / "a.json"), remoto)
+    a.sincronizar_inicio(); a.vigiar_epoca()
+    try:
+        a.registrar(1, pedido_modelo(1, nome="teste antigo")); a.registrar(2, pedido_modelo(2)); drenar(a)
+        assert len(list(remoto.cliente.collection(ld.COLECAO_PEDIDOS).stream())) == 2
+
+        # zera como a ferramenta de limpeza
+        for d in list(remoto.cliente.collection(ld.COLECAO_PEDIDOS).stream()):
+            d.reference.delete()
+        remoto.cliente.collection(ld.COLECAO_META).document(ld.DOC_META).set({"ultimo_id": 0, "dashboard": None, "epoca": "e-novo", "atualizado_em": ld.agora_iso()})
+        for _ in range(150):                                                              # até 15 s para a notícia chegar ao vivo
+            if a.dados.get("epoca") == "e-novo":
+                break
+            threading.Event().wait(0.1)
+        assert a.dados["epoca"] == "e-novo" and a.dados["pedidos"] == {} and a.proximo_id() == 1
+
+        a.registrar(1, pedido_modelo(1, nome="compra nova")); drenar(a)
+        docs = {d.id: d.to_dict() for d in remoto.cliente.collection(ld.COLECAO_PEDIDOS).stream()}
+        meta = remoto.cliente.collection(ld.COLECAO_META).document(ld.DOC_META).get().to_dict()
+        assert set(docs) == {"01"} and docs["01"]["nome"] == "compra nova"
+        assert meta["epoca"] == "e-novo" and meta["ultimo_id"] == 1                        # a gravação do bot NÃO apagou a época
+        print("\n[integração] reset percebido ao vivo pelo bot no Firestore real; nada antigo ressuscitou e a época foi preservada")
+    finally:
+        a.parar_vigia()
+
+
 # ---------------------------------------------------------------- carga real
 def test_carga_real_de_escrita_e_leitura(remoto, tmp_path):
     N = 200

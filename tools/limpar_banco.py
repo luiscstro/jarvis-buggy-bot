@@ -12,8 +12,12 @@ O que NÃO mexe:
   - a referência ao painel antigo do Discord (para o bot apagar essa mensagem ao reiniciar).
 
 Como o arquivo local do bot (store_data.json, inclusive o que está no servidor) ainda tem os pedidos
-antigos, o banco ganha uma nova "época": ao reiniciar, o bot vê que o banco foi zerado, descarta o
-arquivo local e passa a valer só o Firebase. Sem isso os pedidos apagados voltariam.
+antigos, o banco ganha uma nova "época". O bot (versão atual) percebe isso AO VIVO, sem reiniciar:
+esquece os pedidos e as gravações pendentes e passa a valer só o Firebase. Um bot mais antigo só percebe
+ao reiniciar, e se ele receber uma compra antes disso pode desfazer o reset. Por isso:
+
+  >>> Se o bot no servidor for de uma versão ANTERIOR à "época viva", faça o deploy da versão nova (ou pare o
+  >>> bot) ANTES de zerar, e não faça compras entre uma coisa e outra.
 
 Lembre-se de apagar também, no Discord, os canais das compras de teste (nick-01, nick-02...).
 """
@@ -99,7 +103,8 @@ def main():
     print(f"Apagados {len(pedidos)} pedido(s). Pedidos restantes: {restantes}. Nova época: {epoca[:8]}…")
     print("\nPróximos passos:")
     print("  1. No Discord, apague os canais das compras de teste.")
-    print("  2. Reinicie o bot: ele detecta a nova época e descarta o arquivo local antigo do servidor.")
+    print("  2. O bot atual percebe o reset sozinho, ao vivo. Se o bot no servidor for de uma versão antiga, reinicie-o")
+    print("     (e não faça compras antes disso, senão ele pode desfazer o reset).")
 
 
 if __name__ == "__main__":
