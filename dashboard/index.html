@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Painel de Compras</title>
+<title>Painel da Loja</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E%F0%9F%93%8A%3C/text%3E%3C/svg%3E">
 <style>
   :root {
@@ -121,16 +121,22 @@
     td .items { min-width: 0; max-width: none; }
   }
 </style>
+<link rel="stylesheet" href="editor.css">
 </head>
 <body>
 <div class="wrap">
   <header class="top">
-    <h1>📊 Painel de Compras</h1>
+    <h1>📊 Painel da Loja</h1>
     <span class="live" id="live" data-state="wait"><span class="dot"></span><span id="liveText">Conectando…</span></span>
     <span class="spacer"></span>
     <span class="who" id="who" hidden></span>
     <button class="btn" id="signOut" hidden>Sair</button>
   </header>
+
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Seções do painel" hidden>
+    <button type="button" role="tab" id="tabCompras" aria-selected="true" aria-controls="app">🧾 Compras</button>
+    <button type="button" role="tab" id="tabLoja" aria-selected="false" aria-controls="appLoja">🛠️ Loja</button>
+  </nav>
 
   <main id="stateBox" class="center"><div class="panel"><p>Carregando…</p></div></main>
 
@@ -163,9 +169,13 @@
     </div>
     <p style="text-align:center"><button class="btn" id="mais" hidden></button></p>
   </section>
+
+  <section id="appLoja" role="tabpanel" aria-labelledby="tabLoja" hidden></section>
 </div>
 
 <script type="module">
+import { editor, criarRepoFirestore, criarRepoDemo } from "./editor.js";
+
 const TZ = "America/Sao_Paulo";
 const STATUS = {
   aguardando_pagamento: "Aguardando pagamento",
@@ -216,7 +226,7 @@ const estado = { busca: "", status: "", periodo: 0, ordem: "id", dir: -1, limite
 
 // ---------- telas de estado ----------
 function mostrarEstado(titulo, texto, ...acoes) {
-  $("app").hidden = true;
+  $("app").hidden = true; $("appLoja").hidden = true; $("tabs").hidden = true;
   const box = $("stateBox"); box.hidden = false; box.replaceChildren();
   const p = el("div", { class: "panel" }, el("h2", { text: titulo }));
   if (texto) p.append(el("p", { text: texto }));
@@ -224,7 +234,14 @@ function mostrarEstado(titulo, texto, ...acoes) {
   box.append(p);
 }
 function setLive(state, texto) { $("live").dataset.state = state; $("liveText").textContent = texto; }
-function mostrarApp() { $("stateBox").hidden = true; $("app").hidden = false; }
+let abaAtual = "compras";
+function selecionarAba(aba) {
+  abaAtual = aba;
+  $("app").hidden = aba !== "compras"; $("appLoja").hidden = aba !== "loja";
+  $("tabCompras").setAttribute("aria-selected", String(aba === "compras")); $("tabLoja").setAttribute("aria-selected", String(aba === "loja"));
+  if (aba === "compras" && !$("app").hidden) renderChart();   // o gráfico mede a largura: precisa estar visível
+}
+function mostrarApp() { $("stateBox").hidden = true; $("tabs").hidden = false; selecionarAba(abaAtual); }
 
 // ---------- dados derivados ----------
 function normaliza(id, d) {
@@ -412,6 +429,8 @@ function exportarCsv() {
 
 // ---------- controles ----------
 function ligarControles() {
+  $("tabCompras").addEventListener("click", () => selecionarAba("compras"));
+  $("tabLoja").addEventListener("click", () => selecionarAba("loja"));
   const sel = $("fStatus");
   sel.append(el("option", { value: "", text: "Todos os status" }));
   for (const [k, v] of Object.entries(STATUS)) sel.append(el("option", { value: k, text: v }));
@@ -454,12 +473,33 @@ function demo() {
     mk(6, "Sanji", "sanji#1111", "1100000000000000006", [["Sorte Grande", 2], ["Mudança Pequena", 1]], 3500, "aguardando_pagamento", 1, null, null, null),
   ].map((d) => ({ id: String(d.id).padStart(2, "0"), data: () => d }));
   setLive("on", "Modo demonstração · dados fictícios");
-  ligarControles(); receber(docs, []);
+  ligarControles();
+  demoEditor();
+  receber(docs, []);
+}
+
+function demoEditor() {
+  const h = 36e5, agora = Date.now();
+  const item = (id, nome, preco, pagina, ordem, ativo, descricao, horas) => [id, { id, nome, preco_centavos: preco, pagina, ordem, ativo, descricao, atualizado_por: "ana@exemplo.com", atualizado_em: new Date(agora - horas * h) }];
+  const dados = {
+    paginas: new Map([["p1", { id: "p1", ordem: 1, introducao: "# __APOIO AO SERVIDOR__\nApoie o servidor e ganhe benefícios exclusivos!" }], ["p2", { id: "p2", ordem: 2, introducao: "" }]]),
+    itens: new Map([
+      item("escolhidos", "Escolhidos dos Mares", 500, "p1", 10, true, "Dobro de XP e ouro na missão.\n⚠️ **NÃO** vale em missões com multiplicador.", 30),
+      item("mudanca", "Mudança Pequena", 500, "p1", 20, true, "Ajusta um detalhe da ficha.", 28),
+      item("renascimento", "Renascimento", 1500, "p1", 30, true, "Mudanças enormes na ficha.", 26),
+      item("manobra", "Manobra de Emergência", 500, "p2", 10, true, "Sucesso automático após falhar na navegação.", 20),
+      item("aviso", "Aviso de Amigo", 500, "p2", 20, false, "Evita encontros marítimos.", 5),
+    ]),
+    log: [{ id: "l1", quando: new Date(agora - 5 * h), quem: "ana@exemplo.com", acao: "editar", alvo: "aviso", resumo: 'Editou "Aviso de Amigo": ocultado da loja' }],
+  };
+  const empurrar = () => editor.definir({ itens: [...dados.itens.values()], paginas: [...dados.paginas.values()], log: dados.log });
+  editor.montar($("appLoja"), { repo: criarRepoDemo(dados, empurrar), podeEditar: !location.hash.includes("&visualizar") });
+  empurrar();
 }
 
 // ---------- Firebase ----------
 async function iniciar() {
-  if (/^#demo(=\d+)?$/.test(location.hash)) return demo();
+  if (/^#demo(=\d+)?(&visualizar)?$/.test(location.hash)) return demo();
 
   const { firebaseConfig } = await import("./firebase-config.js");
   if (Object.values(firebaseConfig).some((v) => String(v).includes("COLE_AQUI"))) {
@@ -473,6 +513,26 @@ async function iniciar() {
   const app = initializeApp(firebaseConfig), auth = A.getAuth(app), db = F.getFirestore(app);
   ligarControles();
   let cancelarEscuta = null;
+  let cancelarCatalogo = [];
+
+  // Aba "Loja": lê o catálogo ao vivo e descobre se esta pessoa pode editar (lendo só o PRÓPRIO registro de acesso).
+  async function ligarEditor(user) {
+    const email = user.email.toLowerCase();
+    let podeEditar = false;
+    try { const d = await F.getDoc(F.doc(db, "loja_staff", email)); podeEditar = d.exists() && d.data().editor === true; } catch { /* sem registro legível: só visualização */ }
+    if (!auth.currentUser || auth.currentUser.email.toLowerCase() !== email) return;   // trocou de conta enquanto lia
+    const dados = { itens: [], paginas: [], log: [] };
+    const chegou = { itens: false, paginas: false };                 // só desenha quando páginas E itens já chegaram
+    const empurrar = () => { if (chegou.itens && chegou.paginas) editor.definir(dados); };
+    const conv = (d) => ({ id: d.id, ...d.data() });
+    const falha = (e) => editor.avisar(`Não consegui ler o catálogo (${e.code || e.message}).`);
+    editor.montar($("appLoja"), { repo: criarRepoFirestore(F, db, email), podeEditar });
+    cancelarCatalogo = [
+      F.onSnapshot(F.collection(db, "loja_itens"), (s) => { dados.itens = s.docs.map(conv); chegou.itens = true; empurrar(); }, falha),
+      F.onSnapshot(F.collection(db, "loja_paginas"), (s) => { dados.paginas = s.docs.map(conv); chegou.paginas = true; empurrar(); }, falha),
+      F.onSnapshot(F.query(F.collection(db, "loja_catalogo_log"), F.orderBy("quando", "desc"), F.limit(30)), (s) => { dados.log = s.docs.map(conv); empurrar(); }, falha),
+    ];
+  }
 
   const entrar = el("button", { class: "btn primary", type: "button", text: "Entrar com Google" });
   entrar.addEventListener("click", async () => {
@@ -492,6 +552,7 @@ async function iniciar() {
 
   A.onAuthStateChanged(auth, (user) => {
     if (cancelarEscuta) { cancelarEscuta(); cancelarEscuta = null; }
+    cancelarCatalogo.forEach((f) => f()); cancelarCatalogo = []; editor.limpar();
     primeiraCarga = true; pedidos = [];
     $("who").hidden = $("signOut").hidden = !user;
     if (!user) {
@@ -499,6 +560,7 @@ async function iniciar() {
       return mostrarEstado("Acesso restrito", "Entre com a conta Google autorizada pela staff para ver as compras.", entrar);
     }
     $("who").textContent = user.email;
+    ligarEditor(user);
     setLive("wait", "Conectando…");
     mostrarEstado("Carregando compras…", "");
     cancelarEscuta = F.onSnapshot(F.collection(db, "loja_pedidos"),

@@ -39,3 +39,7 @@ backups/
 
 # Testes
 .pytest_cache/
+
+# Cópia local do catálogo (gerada pelo bot)
+catalogo_cache.json
+catalogo_cache.json.tmp

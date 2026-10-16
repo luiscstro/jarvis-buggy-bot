@@ -99,13 +99,32 @@ class FirestoreRemoto:
         return meta or {}, pedidos
 
     # ---------- acesso ao painel web ----------
+    def listar_acessos(self) -> list[tuple[str, bool]]:
+        """[(e-mail, pode_editar)] de quem entra no painel web."""
+        return sorted((d.id, bool((d.to_dict() or {}).get("editor"))) for d in self.cliente.collection(COLECAO_STAFF).stream())
+
     def listar_staff(self) -> list[str]:
-        return sorted(d.id for d in self.cliente.collection(COLECAO_STAFF).stream())
+        return [email for email, _ in self.listar_acessos()]
+
+    def definir_acesso(self, email: str, por: str, editor: Optional[bool] = None) -> dict:
+        """Autoriza `email` no painel web. editor=True permite editar o catálogo; False só visualizar;
+        None mantém o nível que a pessoa já tinha (e cria como "só visualizar" se for nova)."""
+        doc = self.cliente.collection(COLECAO_STAFF).document(email)
+        atual = doc.get()
+        antigo = atual.to_dict() if atual.exists else {}
+        novo = {
+            "email": email,
+            "editor": bool(antigo.get("editor", False)) if editor is None else bool(editor),
+            "adicionado_por": antigo.get("adicionado_por", por),
+            "adicionado_em": antigo.get("adicionado_em", agora_iso()),
+            "atualizado_por": por,
+            "atualizado_em": agora_iso(),
+        }
+        doc.set(novo)
+        return novo
 
     def adicionar_staff(self, email: str, por: str):
-        self.cliente.collection(COLECAO_STAFF).document(email).set(
-            {"email": email, "adicionado_por": por, "adicionado_em": agora_iso()}
-        )
+        self.definir_acesso(email, por, None)
 
     def remover_staff(self, email: str) -> bool:
         doc = self.cliente.collection(COLECAO_STAFF).document(email)

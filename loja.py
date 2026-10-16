@@ -26,6 +26,7 @@ from discord import ui
 from discord.ext import commands
 
 import pix
+from catalogo import CatalogoSync, assinatura_precos, brl, catalogo_padrao
 from loja_dados import Armazenamento, agora_iso
 
 # =============================================
@@ -71,120 +72,25 @@ STATUS = {
 }
 
 # =============================================
-#  CATÁLOGO
+#  CATÁLOGO (editável pelo painel web; veja catalogo.py)
 # =============================================
-# preco em centavos. Os textos aparecem exatamente como serão exibidos no Discord.
-PAGINAS = [
-    {
-        "descricao": """# __APOIO AO SERVIDOR__ <:berry:1222990525372563539>
-Caso o jogador quiser, ele pode apoiar nosso servidor e nos ajudar a crescer! Ao apoiar, nos ajudando em sua manutenção, poderá ter acesso a recompensas e benefícios exclusivos para vocês e **intransferíveis**! Por enquanto, essas são nossas opções... Fiquem atentos que mais virão!
-**Qualquer aquisição e utilização de algum VIP deverá alertar a <@&1222232432527413389> previamente no ticket criado em <#1463579296130928650>**
+# PAGINAS e ITENS são trocados por inteiro, de uma vez, quando a staff edita o catálogo. As telas conferem
+# o catálogo a cada clique e nunca confiam numa cópia antiga (veja LojaView._sincronizar e criar_compra).
+PAGINAS, ITENS = catalogo_padrao()
+ASSINATURA = assinatura_precos(ITENS)    # muda quando um preço muda ou um item entra/sai
+CATALOGO_FONTE = "padrao"                # "firebase" | "cache" | "padrao"
 
-## 🔷 ESCOLHIDOS DOS MARES - R$ 5.00
-Pode, no início da missão, escolher receber uma benção dos mares. Essa benção irá conceder o dobro das recompensas da missão, ou seja, dobro de XP e ouro.
 
-⚠️ **NÃO poderá ser usada em missões com multiplicadores de recompensa! Caso uma missão vire longa duração, seu Escolhido não será gasto.**
-⚠️**² Pode ser guardado apenas no <#1223463532948095016>.**
-
-## 🔷 MUDANÇA PEQUENA - R$ 5.00
-Para aqueles que desejam ajustar __um pequeno detalhe__ na ficha do personagem. Como por exemplo:
-
-🔸Ajustar um Defeito ou Individualidade;
-🔸Trocar um Atributo por outro;
-🔸Trocar uma Perícia;
-🔸Trocar a profissão de um contratado;
-🔸Trocar o tipo de arma meito escolhida de evento ou de ruína (mantendo suas limitações).
-
-⚠️ **Pode ser guardado apenas no <#1223463532948095016>.**
-
-## 🔷 RENASCIMENTO - R$ 15.00
-Para aqueles que já utilizaram seu renascimento grátis e desejam realizar mudanças enormes na ficha, podendo até criar outro personagem.
-
-⚠️ **Pode ser guardado apenas no <#1223463532948095016>.**
-⚠️²** RB que mudarem a __Raça do Personagem__ resultará em algumas características da troca de personagem como __Morte completa__, sendo perdido Akuma no Mi e Recompensa pela cabeça novamente zerada.**
-⚠️³**O usuário que perder a akuma no mi com este recurso só poderá ingerir outra após o período de __2 meses__.**""",
-        "itens": [
-            {"key": "escolhidos", "nome": "Escolhidos dos Mares", "preco": 500},
-            {"key": "mudanca", "nome": "Mudança Pequena", "preco": 500},
-            {"key": "renascimento", "nome": "Renascimento", "preco": 1500},
-        ],
-    },
-    {
-        "descricao": """## 🔷 MANOBRA DE EMERGÊNCIA - R$5.00
-Pode ser usado após falhar no teste de navegação para garantir um sucesso automático.
-
-⚠️ **Pode ser guardado no <#1223463532948095016> ou no baú do bando.**
-
-## 🔷 **AVISO DE AMIGO - R$5.00**
-Usado para __evitar encontros marítimos__ e prosseguir com a exploração/caçada na ilha.
-
-⚠️ **Pode ser guardado no <#1223463532948095016> ou no baú do bando.**
-
-## 🔷 **CAÇADOR DE TESOUROS - R$10.00**
-Usado na exploração, garante que ao adquirir um tesouro, receberá a recompensa em Berry referente ao nível do arqueólogo além de qualquer outra coisa rolada no tesouro.
-
-⚠️ **Pode ser guardado no <#1223463532948095016> ou no baú do bando.**
-
-## 🔷 **SORTE GRANDE - R$15.00**
-Pode rolar novamente __**o dado de tesouro do arqueólogo depois de acharem a ruína**__ e pode escolher o primeiro ou segundo resultado. __Também pode ser usada para rolar novamente a Akuma que encontraram ou que foi comida.__
-
-**⚠️Em caso de rerolagem do Arqueólogo Especialista, só poderá ser usado após o segundo dado!**
-⚠️**² Pode ser guardado no <#1223463532948095016> ou no baú do bando.**
-⚠️**³ Poder ser usado somente uma vez por dado rerolado**""",
-        "itens": [
-            {"key": "manobra", "nome": "Manobra de Emergência", "preco": 500},
-            {"key": "aviso", "nome": "Aviso de Amigo", "preco": 500},
-            {"key": "cacador", "nome": "Caçador de Tesouros", "preco": 1000},
-            {"key": "sorte", "nome": "Sorte Grande", "preco": 1500},
-        ],
-    },
-    {
-        "descricao": """## 🔷 Token de Segunda Chance 5 R$
-Permite que, quando realizar um teste de ofício seja possível repetir o teste imediatamente ao invés de esperar o cooldown.
-⚠️ **Um uso por teste.**
-
-## 🔷 Aprendiz do Mestre 10 R$
-Um NPC mestre de ofício (ex: carpinteiro) visita o navio por 1 dia, podendo realizar um único teste com o bônus dele.
--# ⚠️ Este VIP pode ser usado no inicio de uma sessão como arqueólogo para __encontrar ruínas__, porém deve ser retirado do baú e e avisado ao mestre e ao Arkros __no inicio__ da sessão.
--# ⚠️² O NPC terá o maior bônus possível de nível acordo com o mar em que a tripulação se encontra.
--# ⚠️³ O VIP permite realizar apenas um único teste instantâneo e nada mais, ou seja, resultados posteriores como recompensa de Ouro e Joias do arqueólogo usará como base o nível mais alto da tripulação, nem teste que peçam dias
-
-## 🔷 Re-roll de Lunariano 20 R$
-Permite refazer a rolagem de Lunariano
-⚠️ **Ao comprar este VIP, vá no seu ticket criado em https://discord.com/channels/1220345032079572993/1463579296130928650 e marque a MODERAÇÃO OU SUPERVISÃO para que removam seu cargo de ROLOU LUNARIANO 1 e então faça novamente a rolagem em https://discord.com/channels/1220345032079572993/1285265253957107733**
-
-## 🔷 Rumores! 5 R$
-A reputação recebida em exploração recebe +/- 5 de acordo com o feito da tripulação.
--# ⚠️ Em caso de reputação mista, a tripulação escolhe qual tipo de feito recebe o bônus de +/- 5.
-
-## 🔷 Super Tesouro 20 R$
-Aplica um multiplicador nos bellys do tesouro encontrado pelo arqueólogo.
-> - Blues e Paradise: x2.
-> - New Word: x5.
-> - Laugh Tale: x10.
-> -# ⚠️ Pode ser usado com o caçador de tesouros, entrando após a adição do caçador de tesouros.
-> -# ⚠️² Só pode ser usado quando a recompensa de ruína for "Dinheiro e Joias"
--# Proposto por Roku""",
-        "itens": [
-            {"key": "token", "nome": "Token de Segunda Chance", "preco": 500},
-            {"key": "aprendiz", "nome": "Aprendiz do Mestre", "preco": 1000},
-            {"key": "lunariano", "nome": "Re-roll de Lunariano", "preco": 2000},
-            {"key": "rumores", "nome": "Rumores!", "preco": 500},
-            {"key": "supertesouro", "nome": "Super Tesouro", "preco": 2000},
-        ],
-    },
-]
-
-ITENS = {item["key"]: item for pagina in PAGINAS for item in pagina["itens"]}
+def aplicar_catalogo(paginas: list, itens: dict, fonte: str = "padrao"):
+    """Troca o catálogo em uso. Chamada pela sincronização ao vivo, que roda em outra thread."""
+    global PAGINAS, ITENS, ASSINATURA, CATALOGO_FONTE
+    ITENS, PAGINAS = itens, paginas
+    ASSINATURA, CATALOGO_FONTE = assinatura_precos(itens), fonte
 
 
 # =============================================
 #  UTILITÁRIOS
 # =============================================
-def brl(centavos: int) -> str:
-    return f"R$ {centavos // 100},{centavos % 100:02d}"
-
-
 def slug_nick(nome: str) -> str:
     """Converte um nick em algo válido para nome de canal (ex.: 'Percy Jackson' -> 'percy-jackson')."""
     nome = unicodedata.normalize("NFKD", nome).encode("ascii", "ignore").decode()
@@ -193,13 +99,18 @@ def slug_nick(nome: str) -> str:
 
 
 def total_carrinho(carrinho: dict[str, int]) -> int:
-    return sum(ITENS[k]["preco"] * q for k, q in carrinho.items())
+    return sum(ITENS[k]["preco"] * q for k, q in carrinho.items() if k in ITENS)
 
 
 def linhas_carrinho(carrinho: dict[str, int]) -> str:
     return "\n".join(
-        f"**{q}x** {ITENS[k]['nome']} — {brl(ITENS[k]['preco'] * q)}" for k, q in carrinho.items()
+        f"**{q}x** {ITENS[k]['nome']} — {brl(ITENS[k]['preco'] * q)}" for k, q in carrinho.items() if k in ITENS
     )
+
+
+def linhas_detalhes(detalhes: list[dict]) -> str:
+    """Linhas do pedido a partir da fotografia tirada na compra (nome e preço daquele momento)."""
+    return "\n".join(f"**{d['qtd']}x** {d['nome']} — {brl(d['preco_centavos'] * d['qtd'])}" for d in detalhes)
 
 
 def epoch(iso: str) -> int:
@@ -239,6 +150,7 @@ class PaginaButton(ui.Button):
 
 
 MAX_ITENS_POR_VEZ = 5  # limite do Discord: 5 campos por janela (modal) — só afeta a janela de quantidades
+AVISO_SAIU_DA_LOJA = "⚠️ Esses itens saíram da loja enquanto você escolhia. Confira a lista atualizada."
 
 
 class AdicionarSelect(ui.Select):
@@ -247,11 +159,11 @@ class AdicionarSelect(ui.Select):
     def __init__(self):
         opcoes = [
             discord.SelectOption(
-                label=item["nome"], value=item["key"], description=f"{brl(item['preco'])} — Página {n}"
+                label=item["nome"][:100], value=item["key"], description=f"{brl(item['preco'])} — Página {n}"
             )
             for n, pagina in enumerate(PAGINAS, start=1)
             for item in pagina["itens"]
-        ]
+        ][:25]
         super().__init__(
             placeholder="Escolha os itens que quiser comprar",
             min_values=1,
@@ -262,17 +174,21 @@ class AdicionarSelect(ui.Select):
 
     async def callback(self, interaction: discord.Interaction):
         view: LojaView = self.view
-        if len(self.values) <= MAX_ITENS_POR_VEZ:
-            await interaction.response.send_modal(QuantidadesModal(view, self.values))
+        chaves = [k for k in self.values if k in ITENS]          # o catálogo pode ter mudado desde que o menu abriu
+        if not chaves:
+            await view.atualizar(interaction, aviso=AVISO_SAIU_DA_LOJA)
+            return
+        if len(chaves) <= MAX_ITENS_POR_VEZ:
+            await interaction.response.send_modal(QuantidadesModal(view, chaves))
             return
         # Mais de 5 itens não cabem numa janela do Discord: entram com 1 unidade
         # e as quantidades são ajustadas depois pelo menu do carrinho.
-        for key in self.values:
+        for key in chaves:
             view.carrinho.setdefault(key, 1)
         await view.atualizar(
             interaction,
             aviso=(
-                f"ℹ️ {len(self.values)} itens adicionados com **1 unidade** cada. "
+                f"ℹ️ {len(chaves)} itens adicionados com **1 unidade** cada. "
                 "Para mudar as quantidades, use o menu do carrinho (até 5 itens por vez)."
             ),
         )
@@ -283,9 +199,9 @@ class QuantidadeSelect(ui.Select):
 
     def __init__(self, carrinho: dict[str, int]):
         opcoes = [
-            discord.SelectOption(label=f"{q}x {ITENS[k]['nome']}", value=k, description="Alterar quantidade ou remover")
-            for k, q in carrinho.items()
-        ]
+            discord.SelectOption(label=f"{q}x {ITENS[k]['nome']}"[:100], value=k, description="Alterar quantidade ou remover")
+            for k, q in carrinho.items() if k in ITENS
+        ][:25]
         super().__init__(
             placeholder="Alterar quantidade / remover do carrinho (até 5 por vez)",
             min_values=1,
@@ -295,7 +211,11 @@ class QuantidadeSelect(ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(QuantidadesModal(self.view, self.values))
+        chaves = [k for k in self.values if k in ITENS]
+        if not chaves:
+            await self.view.atualizar(interaction, aviso=AVISO_SAIU_DA_LOJA)
+            return
+        await interaction.response.send_modal(QuantidadesModal(self.view, chaves))
 
 
 class QuantidadesModal(ui.Modal):
@@ -320,11 +240,14 @@ class QuantidadesModal(ui.Modal):
             try:
                 novas[key] = max(0, int(campo.value.strip()))
             except ValueError:
+                nome = ITENS.get(key, {}).get("nome", key)
                 await interaction.response.send_message(
-                    f"⚠️ Quantidade inválida em **{ITENS[key]['nome']}**. Digite apenas números.", ephemeral=True
+                    f"⚠️ Quantidade inválida em **{nome}**. Digite apenas números.", ephemeral=True
                 )
                 return
         for key, qtd in novas.items():
+            if key not in ITENS:                       # saiu da loja enquanto a janela estava aberta
+                continue
             if qtd:
                 self.loja_view.carrinho[key] = qtd
             else:
@@ -359,10 +282,28 @@ class LojaView(ui.View):
         self.pagina = 0
         self.carrinho: dict[str, int] = {}
         self.finalizando = False
+        self.assinatura = ASSINATURA        # os preços que a pessoa viu pela última vez
         self.montar()
+
+    def _sincronizar(self) -> tuple[list[str], bool]:
+        """Alinha esta tela ao catálogo atual: tira do carrinho o que saiu da loja e confere se algo mudou.
+
+        Devolve (itens removidos do carrinho, se preços/itens mudaram desde a última vez que a pessoa viu).
+        """
+        removidos = [k for k in self.carrinho if k not in ITENS]
+        for k in removidos:
+            del self.carrinho[k]
+        self.pagina = max(0, min(self.pagina, len(PAGINAS) - 1))
+        mudou = self.assinatura != ASSINATURA
+        self.assinatura = ASSINATURA
+        return removidos, mudou
 
     async def atualizar(self, interaction: discord.Interaction, aviso: Optional[str] = None):
         """Redesenha a loja na mensagem atual; `aviso` aparece acima dos embeds (None limpa)."""
+        removidos, mudou = self._sincronizar()
+        if aviso is None and (removidos or mudou):
+            aviso = "ℹ️ O catálogo da loja foi atualizado: confira os itens e os preços." + (
+                " Tirei do carrinho o que saiu da loja." if removidos else "")
         self.montar()
         await interaction.response.edit_message(content=aviso, embeds=self.embeds(), view=self)
 
@@ -370,23 +311,27 @@ class LojaView(ui.View):
         self.clear_items()
         for i in range(len(PAGINAS)):
             self.add_item(PaginaButton(i, ativa=i == self.pagina))
-        self.add_item(AdicionarSelect())
+        if ITENS:
+            self.add_item(AdicionarSelect())
         if self.carrinho:
             self.add_item(QuantidadeSelect(self.carrinho))
         self.add_item(FinalizarButton(desativado=not self.carrinho))
         self.add_item(LimparButton(desativado=not self.carrinho))
 
     def embeds(self) -> list[discord.Embed]:
-        pagina = PAGINAS[self.pagina]
-        catalogo = discord.Embed(description=pagina["descricao"], color=discord.Color.blue())
-        catalogo.set_footer(text=f"Página {self.pagina + 1}/{len(PAGINAS)}")
+        if PAGINAS:
+            indice = max(0, min(self.pagina, len(PAGINAS) - 1))
+            catalogo = discord.Embed(description=PAGINAS[indice]["descricao"] or "(esta página está vazia)", color=discord.Color.blue())
+            catalogo.set_footer(text=f"Página {indice + 1}/{len(PAGINAS)}")
+        else:
+            catalogo = discord.Embed(description="🛒 A loja está sem itens no momento. Volte mais tarde!", color=discord.Color.blue())
 
         carrinho = discord.Embed(title="🛒 Seu carrinho", color=discord.Color.green())
         if self.carrinho:
             carrinho.description = linhas_carrinho(self.carrinho)
             carrinho.set_footer(text=f"Total: {brl(total_carrinho(self.carrinho))}")
         else:
-            carrinho.description = "Vazio. Escolha itens no menu abaixo e informe as quantidades."
+            carrinho.description = "Vazio. Escolha itens no menu abaixo e informe as quantidades." if ITENS else "Vazio."
         return [catalogo, carrinho]
 
 
@@ -421,7 +366,12 @@ class LojaCog(commands.Cog):
         self.bot = bot
         self.staff_roles = staff_roles
         self.armazenamento = armazenamento
+        self.catalogo_sync: Optional[CatalogoSync] = None
         self.lock = asyncio.Lock()
+
+    async def cog_unload(self):
+        if self.catalogo_sync:
+            self.catalogo_sync.parar()
 
     async def cog_load(self):
         self.bot.add_view(PainelLojaView(self))
@@ -468,7 +418,7 @@ class LojaCog(commands.Cog):
     # ---------- buggy!loja_acesso ----------
     @commands.command(name="loja_acesso")
     async def loja_acesso(self, ctx: commands.Context, acao: str = "listar", email: Optional[str] = None):
-        """[Staff] Controla quem pode entrar no painel web de compras (login com Google)."""
+        """[Staff] Controla quem entra no painel web (login com Google) e quem pode EDITAR o catálogo."""
         if not self.eh_staff(ctx.author):
             await ctx.send("⛔ Sem permissão, tripulante!")
             return
@@ -479,15 +429,17 @@ class LojaCog(commands.Cog):
 
         acao = acao.lower()
         if acao in ("listar", "lista"):
-            emails = await asyncio.to_thread(remoto.listar_staff)
-            texto = "\n".join(f"• `{e}`" for e in emails) or "Ninguém foi autorizado ainda."
-            await ctx.send(f"🔑 **Acesso ao painel web ({len(emails)}):**\n{texto}", delete_after=60)
+            acessos = await asyncio.to_thread(remoto.listar_acessos)
+            texto = "\n".join(f"• {'✏️ edita' if editor else '👁️ só vê'} — `{e}`" for e, editor in acessos) or "Ninguém foi autorizado ainda."
+            await ctx.send(f"🔑 **Acesso ao painel web ({len(acessos)}):**\n{texto}", delete_after=60)
             return
 
+        niveis = {"adicionar": None, "add": None, "editor": True, "editar": True, "visualizar": False, "ver": False}
         email = (email or "").strip().lower()
-        if acao not in ("adicionar", "add", "remover", "remove") or not EMAIL_RE.match(email):
+        if (acao not in niveis and acao not in ("remover", "remove")) or not EMAIL_RE.match(email):
             await ctx.send(
-                "Use: `buggy!loja_acesso listar`, `buggy!loja_acesso adicionar <email>` "
+                "Use: `buggy!loja_acesso listar`, `buggy!loja_acesso adicionar <email>` (só vê), "
+                "`buggy!loja_acesso editor <email>` (vê e edita o catálogo), `buggy!loja_acesso visualizar <email>` "
                 "ou `buggy!loja_acesso remover <email>`. O e-mail deve ser o da conta Google usada no login.",
                 delete_after=30,
             )
@@ -496,10 +448,13 @@ class LojaCog(commands.Cog):
             await ctx.message.delete()  # não deixa o e-mail exposto no canal
         except (discord.Forbidden, discord.NotFound):
             pass
+        por = f"{ctx.author} ({ctx.author.id})"
         try:
-            if acao in ("adicionar", "add"):
-                await asyncio.to_thread(remoto.adicionar_staff, email, f"{ctx.author} ({ctx.author.id})")
-                await ctx.send(f"✅ `{email}` agora pode entrar no painel web.", delete_after=20)
+            if acao in niveis:
+                novo = await asyncio.to_thread(remoto.definir_acesso, email, por, niveis[acao])
+                texto = ("✏️ `{}` agora pode **editar o catálogo** no painel web." if novo["editor"]
+                         else "👁️ `{}` pode entrar no painel web, **só para ver** (use `editor` para permitir edição).").format(email)
+                await ctx.send(texto, delete_after=20)
             else:
                 existia = await asyncio.to_thread(remoto.remover_staff, email)
                 await ctx.send(
@@ -534,8 +489,15 @@ class LojaCog(commands.Cog):
             linhas.append(f"🔄 Última gravação no Firebase: {ultima} · na fila: **{st['pendentes']}**")
             if st["ultimo_erro"]:
                 linhas.append(f"❌ Último erro: `{st['ultimo_erro'][:200]}`")
-        linhas += self._diagnostico_pix() + self._diagnostico_permissoes(ctx.guild)
+        linhas += self._diagnostico_catalogo() + self._diagnostico_pix() + self._diagnostico_permissoes(ctx.guild)
         await ctx.send("\n".join(linhas))
+
+    @staticmethod
+    def _diagnostico_catalogo() -> list[str]:
+        fonte = {"firebase": "✅ Firebase, ao vivo (editado pelo painel)",
+                 "cache": "⚠️ cópia local (o Firebase não respondeu na partida)",
+                 "padrao": "⚠️ catálogo padrão do código (sem Firebase e sem cópia local)"}.get(CATALOGO_FONTE, CATALOGO_FONTE)
+        return [f"📚 Catálogo: **{len(ITENS)}** item(ns) em **{len(PAGINAS)}** página(s) — {fonte}"]
 
     @staticmethod
     def _diagnostico_pix() -> list[str]:
@@ -648,13 +610,23 @@ class LojaCog(commands.Cog):
             await interaction.response.send_message("⚠️ Seu carrinho está vazio.", ephemeral=True)
             return
 
+        # A staff pode ter editado o catálogo desde a última vez que a pessoa viu o carrinho. Nunca se cobra
+        # um preço que ela não viu: mostra tudo de novo e pede para finalizar outra vez.
+        if view.assinatura != ASSINATURA or any(k not in ITENS for k in view.carrinho):
+            await view.atualizar(interaction, aviso=(
+                "⚠️ O catálogo foi atualizado desde a última vez que você viu o carrinho. "
+                "Confira os itens e os preços abaixo e clique em **Finalizar compra** de novo."))
+            return
+
+        # Fotografia do pedido, tirada AGORA e sem esperas no meio: o que vale é o nome e o preço deste momento.
+        carrinho = dict(view.carrinho)
+        detalhes = [{"nome": ITENS[k]["nome"], "qtd": q, "preco_centavos": ITENS[k]["preco"]} for k, q in carrinho.items()]
+        total = sum(d["qtd"] * d["preco_centavos"] for d in detalhes)
+
         view.finalizando = True
         await interaction.response.defer()
         guild = interaction.guild
         membro = interaction.user
-
-        carrinho = dict(view.carrinho)
-        total = total_carrinho(carrinho)
 
         cargos_staff = [r for r in (discord.utils.get(guild.roles, name=n) for n in self.staff_roles) if r]
         cargo_alerta = guild.get_role(LOJA_CARGO_ALERTA_ID) if LOJA_CARGO_ALERTA_ID else None
@@ -720,9 +692,7 @@ class LojaCog(commands.Cog):
                 "nome": membro.display_name,
                 "canal_id": canal.id,
                 "itens": carrinho,
-                "itens_detalhe": [
-                    {"nome": ITENS[k]["nome"], "qtd": q, "preco_centavos": ITENS[k]["preco"]} for k, q in carrinho.items()
-                ],
+                "itens_detalhe": detalhes,
                 "total_centavos": total,
                 "criado_em": agora_iso(),
                 "status": "aguardando_pagamento",
@@ -734,7 +704,7 @@ class LojaCog(commands.Cog):
 
         embed = discord.Embed(
             title=f"🛒 Compra {compra_id:02d}",
-            description=linhas_carrinho(carrinho),
+            description=linhas_detalhes(detalhes),
             color=discord.Color.green(),
         )
         embed.add_field(name="Total a pagar", value=f"**{brl(total)}**", inline=False)
@@ -769,7 +739,7 @@ class LojaCog(commands.Cog):
             embed.set_footer(text="A staff vai combinar o pagamento e a entrega aqui neste canal.")
 
         mencoes = " ".join([membro.mention] + [r.mention for r in cargos_acesso])
-        texto_simples = f"**Compra {compra_id:02d}** — total **{brl(total)}**\n{linhas_carrinho(carrinho)}"
+        texto_simples = f"**Compra {compra_id:02d}** — total **{brl(total)}**\n{linhas_detalhes(detalhes)}"
         if codigo:
             texto_simples += f"\n\n💳 **PIX copia e cola:**\n```{codigo}```\nDepois envie o comprovante aqui."
         enviado = await self._enviar_ticket(
@@ -821,4 +791,8 @@ class LojaCog(commands.Cog):
 
 async def setup_loja(bot: commands.Bot, staff_roles: list[str]):
     armazenamento = await Armazenamento.criar(LOJA_ARQUIVO)
-    await bot.add_cog(LojaCog(bot, staff_roles, armazenamento))
+    sync = CatalogoSync(armazenamento.remoto, aplicar_catalogo)
+    await asyncio.to_thread(sync.iniciar)          # semeia (1ª vez), carrega e passa a acompanhar o catálogo ao vivo
+    cog = LojaCog(bot, staff_roles, armazenamento)
+    cog.catalogo_sync = sync
+    await bot.add_cog(cog)
