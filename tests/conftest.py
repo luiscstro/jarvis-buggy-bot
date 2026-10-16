@@ -61,13 +61,24 @@ class _DocRef:
     def __init__(self, bd, col, id_):
         self.bd, self.col, self.id = bd, col, id_
 
-    def set(self, dados):
+    def set(self, dados, merge=False):
         self.bd._checar("escrita")
         self.bd.escritas += 1
         if self.bd.latencia:
             time.sleep(self.bd.latencia)
-        self.bd.cols.setdefault(self.col, {})[self.id] = copy.deepcopy(dados)
+        colecao = self.bd.cols.setdefault(self.col, {})
+        if merge and self.id in colecao:
+            colecao[self.id] = {**colecao[self.id], **copy.deepcopy(dados)}
+        else:
+            colecao[self.id] = copy.deepcopy(dados)
         self.bd._notificar(self.col)
+        self.bd._notificar_doc(self.col, self.id)
+
+    def on_snapshot(self, callback):
+        """Como o cliente real: entrega o estado atual do documento de imediato e de novo a cada mudança."""
+        self.bd.escutas_doc.append((self.col, self.id, callback))
+        callback([_Doc(self.id, self.bd.cols.get(self.col, {}).get(self.id))], [], None)
+        return _EscutaDoc(self.bd, (self.col, self.id, callback))
 
     def get(self):
         self.bd._checar("leitura")
@@ -77,6 +88,16 @@ class _DocRef:
         self.bd._checar("escrita")
         self.bd.cols.get(self.col, {}).pop(self.id, None)
         self.bd._notificar(self.col)
+        self.bd._notificar_doc(self.col, self.id)
+
+
+class _EscutaDoc:
+    def __init__(self, bd, chave):
+        self.bd, self.chave = bd, chave
+
+    def unsubscribe(self):
+        if self.chave in self.bd.escutas_doc:
+            self.bd.escutas_doc.remove(self.chave)
 
 
 class _Escuta:
@@ -120,7 +141,13 @@ class FakeFirestore:
         self.falhas = 0         # as próximas N escritas falham
         self.latencia = 0.0     # segundos por escrita
         self.escritas = 0
-        self.escutas: list = []  # (coleção, callback) de quem usou on_snapshot
+        self.escutas: list = []  # (coleção, callback) de quem usou on_snapshot numa coleção
+        self.escutas_doc: list = []  # (coleção, id, callback) de quem usou on_snapshot num documento
+
+    def _notificar_doc(self, colecao, id_):
+        for col, i, cb in list(self.escutas_doc):
+            if (col, i) == (colecao, id_):
+                cb([_Doc(id_, self.cols.get(colecao, {}).get(id_))], [], None)
 
     def _notificar(self, colecao):
         for nome, cb in list(self.escutas):

@@ -16,6 +16,12 @@ Exceção: se o banco foi zerado de propósito (tools/limpar_banco.py), ele ganh
 "época". Quem tem o arquivo local de outra época o descarta e passa a valer só o Firebase;
 sem isso, o arquivo antigo do servidor ressuscitaria os dados apagados.
 
+Duas regras que impedem que um bot desatualizado desfaça um reset:
+  - o bot NUNCA escreve a época (só a ferramenta de limpeza escreve): o estado é gravado com
+    "mesclar", que não apaga campos que o bot não conhece;
+  - o bot vigia a época ao vivo: se ela mudar com ele rodando, ele esquece tudo na hora (dados e
+    gravações pendentes), sem precisar reiniciar.
+
 Credenciais (service account do Firebase), em ordem de prioridade:
   1. FIREBASE_CREDENTIALS_BASE64  — conteúdo do .json em base64, numa linha do .env
   2. FIREBASE_CREDENTIALS_FILE    — caminho do .json (padrão: firebase-credentials.json)
@@ -132,11 +138,16 @@ class FirestoreRemoto:
         doc.delete()
         return existia
 
+    def escutar_meta(self, callback):
+        """Chama callback a cada mudança do documento de estado (onde fica a época). Devolve algo com unsubscribe()."""
+        return self.cliente.collection(COLECAO_META).document(DOC_META).on_snapshot(callback)
+
     def salvar(self, tipo: str, chave: str, dados: dict):
         if tipo == "pedido":
             self.cliente.collection(COLECAO_PEDIDOS).document(chave).set(dados)
         else:
-            self.cliente.collection(COLECAO_META).document(DOC_META).set(dados)
+            # mesclar: nunca apaga campos que este bot não conhece (a época, em especial)
+            self.cliente.collection(COLECAO_META).document(DOC_META).set(dados, merge=True)
 
 
 class Sincronizador:
@@ -157,6 +168,16 @@ class Sincronizador:
     @property
     def pendentes(self) -> int:
         return self.fila.qsize() + len(self.falhos)
+
+    def descartar_pendentes(self):
+        """Esquece tudo que ainda não subiu. Usado quando o banco é zerado: dados antigos não podem ser reenviados."""
+        self.falhos.clear()
+        while True:
+            try:
+                self.fila.get_nowait()
+            except queue.Empty:
+                break
+            self.fila.task_done()
 
     def _tentar(self, tipo: str, chave: str, dados: dict) -> bool:
         try:
@@ -234,6 +255,8 @@ class Armazenamento:
         self.remoto = remoto
         self.sincronizador = Sincronizador(remoto) if remoto else None
         self.firebase_ok_na_partida: Optional[bool] = None
+        self._escuta_epoca = None
+        self.atraso_retentativa = 15.0     # segundos (multiplicado pelo nº da tentativa)
 
     @classmethod
     async def criar(cls, caminho: str) -> "Armazenamento":
@@ -242,6 +265,7 @@ class Armazenamento:
         armazenamento = cls(caminho, remoto)
         if remoto:
             await asyncio.to_thread(armazenamento.sincronizar_inicio)
+            await asyncio.to_thread(armazenamento.vigiar_epoca)
         else:
             armazenamento.completar_locais()
         return armazenamento
@@ -287,8 +311,47 @@ class Armazenamento:
         self._salvar_local()
         print(f"[Loja] Firebase conectado: {len(locais)} pedido(s), último ID {self.dados['ultimo_id']:02d}.")
 
+    def vigiar_epoca(self):
+        """Fica de olho no banco: se ele for zerado com o bot rodando, o bot esquece tudo na hora (sem reiniciar)."""
+        def adotar(epoca, tentativa=1):
+            try:
+                if epoca == self.dados.get("epoca"):
+                    return                                   # outra notificação já cuidou disto
+                meta_r, pedidos_r = self.remoto.carregar()
+                self._adotar_firebase(meta_r, pedidos_r, epoca)
+            except Exception as e:  # nunca derruba a thread do Firebase
+                print(f"[Loja] Não consegui acompanhar o reset do banco (tentativa {tentativa}/5): {type(e).__name__}: {e}")
+                if tentativa < 5:                            # o Firebase pode estar instável agora: tenta de novo, com calma
+                    nova = threading.Timer(self.atraso_retentativa * tentativa, adotar, args=(epoca, tentativa + 1))
+                    nova.daemon = True
+                    nova.start()
+
+        def ao_mudar(docs, mudancas, quando):
+            try:
+                if not docs or not docs[0].exists:
+                    return
+                epoca = (docs[0].to_dict() or {}).get("epoca")
+                if epoca and epoca != self.dados.get("epoca"):
+                    adotar(epoca)
+            except Exception as e:
+                print(f"[Loja] Erro ao acompanhar a época do banco ({type(e).__name__}: {e}).")
+        try:
+            self._escuta_epoca = self.remoto.escutar_meta(ao_mudar)
+        except Exception as e:
+            print(f"[Loja] Não consegui vigiar a época do banco ({type(e).__name__}: {e}).")
+
+    def parar_vigia(self):
+        if self._escuta_epoca is not None:
+            try:
+                self._escuta_epoca.unsubscribe()
+            except Exception:
+                pass
+            self._escuta_epoca = None
+
     def _adotar_firebase(self, meta_r: dict, pedidos_r: dict, epoca: str):
         """O banco foi zerado (outra época): descarta o arquivo local e fica só com o Firebase."""
+        if self.sincronizador:
+            self.sincronizador.descartar_pendentes()      # nada do que estava na fila ou falhou pode ressuscitar
         descartados = len(self.dados["pedidos"])
         for chave, pedido in pedidos_r.items():
             completar_pedido(pedido, chave)
@@ -320,8 +383,7 @@ class Armazenamento:
             self.sincronizador.enviar("meta", DOC_META, {
                 "ultimo_id": self.dados["ultimo_id"],
                 "dashboard": self.dados["dashboard"],
-                "epoca": self.dados.get("epoca"),
-                "atualizado_em": agora_iso(),
+                "atualizado_em": agora_iso(),      # a época NÃO vai aqui: só a ferramenta de limpeza a escreve
             })
 
     def proximo_id(self) -> int:
