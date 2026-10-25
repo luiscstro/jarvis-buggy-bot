@@ -250,12 +250,12 @@ function normaliza(id, d) {
     : Object.entries(d.itens || {}).map(([k, q]) => ({ nome: NOMES[k] || k, qtd: q }));
   return {
     id: Number(d.id ?? id), nome: d.nome || d.usuario || "", usuario: d.usuario || "", usuario_id: String(d.usuario_id ?? ""),
-    itens, total: Number(d.total_centavos || 0), status: d.status || "aguardando_pagamento",
+    itens, beneficio: d.tipo === "beneficio", total: Number(d.total_centavos || 0), status: d.status || "aguardando_pagamento",
     criado_em: d.criado_em || "", pago_em: d.pago_em || "", entregue_em: d.entregue_em || "",
     fechado_em: d.fechado_em || "", atualizado_por: d.atualizado_por || "",
   };
 }
-const itensTexto = (p) => p.itens.map((i) => `${i.qtd}x ${i.nome}`).join(", ");
+const itensTexto = (p) => (p.beneficio ? "🎁 Benefício mensal: " : "") + p.itens.map((i) => `${i.qtd}x ${i.nome}`).join(", ");
 
 function resumo(lista) {
   const r = Object.fromEntries(Object.keys(STATUS).map((s) => [s, { n: 0, v: 0 }]));
@@ -268,7 +268,7 @@ function renderCards() {
   const confirmado = (r.paga?.v || 0) + (r.entregue?.v || 0);
   const defs = [
     ["💵 Faturamento confirmado", brl(confirmado), `${(r.paga?.n || 0) + (r.entregue?.n || 0)} compra(s) paga(s)`, "hero"],
-    ["🧾 Compras", String(pedidos.length), "no total"],
+    ["🧾 Compras", String(pedidos.filter((p) => !p.beneficio).length), `no total · ${pedidos.filter((p) => p.beneficio).length} benefício(s) mensal(is) à parte`],
     ["🟡 Aguardando pagamento", String(r.aguardando_pagamento.n), brl(r.aguardando_pagamento.v)],
     ["💰 Pagas, a entregar", String(r.paga.n), brl(r.paga.v)],
     ["📦 Entregues", String(r.entregue.n), brl(r.entregue.v)],
@@ -416,11 +416,11 @@ new ResizeObserver(() => {
 function exportarCsv() {
   const seguro = (v) => { const t = String(v ?? ""); return /^[=+\-@\t\r]/.test(t) ? "'" + t : t; };
   const cel = (v) => `"${seguro(v).replace(/"/g, '""')}"`;
-  const linhas = [["ID da compra", "Data/hora (Brasília)", "Nome", "Usuário", "ID do usuário", "Itens", "Total (R$)", "Status", "Pago em", "Entregue em", "Fechado em", "Responsável"]];
+  const linhas = [["ID da compra", "Data/hora (Brasília)", "Nome", "Usuário", "ID do usuário", "Itens", "Total (R$)", "Status", "Pago em", "Entregue em", "Fechado em", "Responsável", "Tipo"]];
   for (const p of [...filtrados()].sort((a, b) => a.id - b.id)) {
     const f = (i) => i ? new Date(i).toLocaleString("pt-BR", { timeZone: TZ }) : "";
     linhas.push([String(p.id).padStart(2, "0"), f(p.criado_em), p.nome, p.usuario, p.usuario_id, itensTexto(p),
-      (p.total / 100).toFixed(2).replace(".", ","), STATUS[p.status] || p.status, f(p.pago_em), f(p.entregue_em), f(p.fechado_em), p.atualizado_por]);
+      (p.total / 100).toFixed(2).replace(".", ","), STATUS[p.status] || p.status, f(p.pago_em), f(p.entregue_em), f(p.fechado_em), p.atualizado_por, p.beneficio ? "Benefício mensal" : "Compra"]);
   }
   const blob = new Blob(["﻿" + linhas.map((l) => l.map(cel).join(";")).join("\r\n")], { type: "text/csv;charset=utf-8" });
   const a = el("a", { href: URL.createObjectURL(blob), download: `compras_${diaChave(new Date())}.csv` });
@@ -471,7 +471,9 @@ function demo() {
     mk(4, "Nami", "nami#0420", "1100000000000000004", [["Manobra de Emergência", 1], ["Aviso de Amigo", 1]], 1000, "entregue", 30, 1, 3, "Beto (Developer) (12)"),
     mk(5, "Usopp", "usopp#7777", "1100000000000000005", [["Re-roll de Lunariano", 1]], 2000, "aguardando_pagamento", 5, null, null, null),
     mk(6, "Sanji", "sanji#1111", "1100000000000000006", [["Sorte Grande", 2], ["Mudança Pequena", 1]], 3500, "aguardando_pagamento", 1, null, null, null),
-  ].map((d) => ({ id: String(d.id).padStart(2, "0"), data: () => d }));
+  ].concat(location.hash.includes("&beneficios") ? [
+    { ...mk(7, "Robin", "robin#0001", "1100000000000000007", [["Escolhidos dos Mares", 3], ["Sorte Grande", 1], ["Renascimento (à escolha)", 1]], 0, "paga", 2, 0, null, "Automático (assinatura nível 1)"), tipo: "beneficio" },
+  ] : []).map((d) => ({ id: String(d.id).padStart(2, "0"), data: () => d }));
   setLive("on", "Modo demonstração · dados fictícios");
   ligarControles();
   demoEditor();
@@ -499,7 +501,7 @@ function demoEditor() {
 
 // ---------- Firebase ----------
 async function iniciar() {
-  if (/^#demo(=\d+)?(&visualizar)?$/.test(location.hash)) return demo();
+  if (/^#demo(=\d+)?(&visualizar)?(&beneficios)?$/.test(location.hash)) return demo();
 
   const { firebaseConfig } = await import("./firebase-config.js");
   if (Object.values(firebaseConfig).some((v) => String(v).includes("COLE_AQUI"))) {

@@ -234,3 +234,21 @@ def test_site_real_mostra_a_tela_de_login(tmp_path):
     assert "Acesso restrito" in r["resultado"]["estado"] and "Entrar com Google" in r["resultado"]["estado"]
     assert r["resultado"]["appVisivel"] is False and not r["excecoes"]
     assert [e for e in r["erros"] if "favicon" not in e] == []
+
+
+def test_resgate_de_beneficio_aparece_marcado_e_nao_conta_como_compra(site, tmp_path):
+    js = """
+    await esperar(() => document.querySelectorAll('#rows tr').length >= 7);
+    const cards = Object.fromEntries([...document.querySelectorAll('.card')].map(c => [c.querySelector('.label').textContent.replace(/^\\S+\\s/, ''), [c.querySelector('.value').textContent, c.querySelector('.sub').textContent]]));
+    let blob; URL.createObjectURL = (b) => { blob = b; return 'blob:teste'; };
+    document.getElementById('csv').click();
+    await esperar(() => blob);
+    const linha = [...document.querySelectorAll('#rows tr')].find(l => l.querySelector('.id')?.textContent === '#07');
+    return { cards, itens: linha.querySelector('td[data-label="Itens"]').textContent, csv: await blob.text(), total: document.querySelectorAll('#rows tr').length };
+    """
+    r = abrir(site + "#demo&beneficios", js, tmp_path)["resultado"]
+    assert r["total"] == 7 and r["cards"]["Compras"][0] == "6" and "1 benefício" in r["cards"]["Compras"][1]
+    assert "Benefício mensal: 3x Escolhidos dos Mares" in r["itens"]
+    cab, *linhas = r["csv"].split("\r\n")
+    assert cab.endswith('"Tipo"') and linhas[-1].endswith('"Benefício mensal"') and linhas[0].endswith('"Compra"')
+    assert r["cards"]["Faturamento confirmado"][0] == abrir(site + "#demo", "await esperar(() => document.querySelectorAll('#rows tr').length >= 6); return document.querySelector('.card .value').textContent;", tmp_path)["resultado"]

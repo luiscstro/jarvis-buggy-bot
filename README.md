@@ -112,6 +112,34 @@ Para entrar no **modo admin**, use o prefixo `admin:` após a menção:
 5. A staff usa os botões do canal: **Marcar como pago**, **Marcar como entregue** e **Fechar compra** (fechar sem pagar marca como cancelada e apaga o canal).
 6. Tudo aparece no painel de compras (site externo, abaixo).
 
+### Registro público das compras e gachas
+
+Toda compra aprovada ("Marcar como pago") é anunciada pelo bot, num embed, no canal de registro (`1563931955207077889`) para os jogadores conferirem (o painel web só a staff vê): número da compra, quem comprou, **quem aprovou**, quando, itens, total, gachas e o estado da entrega. Quando a staff marca como entregue, o mesmo post é **editado** (não duplica). Nunca aparecem o PIX, o link do canal privado nem dados da staff além do nome de quem aprovou.
+
+- **Gachas:** 1 a cada R$ 20,00 em **cada compra** (R$ 40 = 2, R$ 60 = 3...), sempre arredondando para baixo. O aviso no canal da compra já informa.
+- Se o Discord falhar na hora de postar, o anúncio fica pendente e o bot tenta de novo sozinho (a cada 2 minutos e ao ligar), sem repetir posts.
+- O bot precisa de *Ver Canal*, *Enviar Mensagens*, *Inserir Links* e *Ver Histórico* nesse canal. `buggy!loja_status` mostra se está tudo certo.
+
+### Benefícios mensais das assinaturas
+
+O botão **🎁 Benefícios do mês** do painel libera, **uma vez por mês**, para quem tem o cargo de assinante:
+
+| Cargo | Itens fixos (automáticos) | VIPs à escolha (até R$ 15,00) |
+|---|---|---|
+| `1558206515784188115` (nível 1) | 3 Escolhido dos Mares + 1 Sorte Grande | 1 |
+| `1558206661779267665` (nível 2) | 6 Escolhido dos Mares + 2 Sorte Grande | 2 |
+
+Só a escolha dos VIPs é feita no botão; os itens fixos já entram sozinhos. O resgate vira um pedido normal (tipo benefício, valor R$ 0,00, não gera gacha) com um canal privado de entrega para a staff, e também é registrado no canal público.
+
+Como a regra de "1 por mês" é protegida:
+- A trava é um documento no Firebase (`loja_beneficios/AAAA-MM-<id do jogador>`), criado de forma **atômica** pelo servidor: com 2 cliques, 2 bots ou 30 pedidos simultâneos, só um passa. O navegador não tem acesso a essa coleção.
+- Vale para o mês de Brasília (vira à 00:00 do dia 1), contado pela hora do Discord, não pelo relógio do servidor. Reiniciar o bot, apagar `store_data.json` ou zerar o banco de pedidos **não** devolve o direito.
+- Sem Firebase não há resgate (falha fechada): não dá para garantir a regra.
+- Se o bot cair no meio, o resgate é concluído ao ligar (e a cada 2 minutos): reaproveita o canal e o pedido que já existem, sem duplicar nada.
+- O cargo e as escolhas são conferidos de novo na hora de confirmar. Se algo der errado, o jogador recebe uma mensagem com um **código** pedindo para acionar o suporte (o detalhe técnico fica só no log do bot).
+
+Depois de atualizar o bot, rode `buggy!loja_painel` de novo para o painel ganhar o botão novo (e apague a mensagem do painel antigo).
+
 ### Painel de compras (site externo, ao vivo)
 
 Um site que mostra todas as compras em tempo real, **fora do Discord**: https://buggy-loja.web.app
@@ -181,6 +209,7 @@ Configuração (no `.env`):
 - `PIX_COPIA_COLA` — código PIX "copia e cola" da conta que recebe. O bot embute o valor de cada compra e gera o QR Code. **Nunca coloque no código nem no GitHub.** Se faltar ou for inválido, o ticket abre sem PIX.
 - `LOJA_CATEGORIA_ID` — categoria onde os canais de compra são criados.
 - `LOJA_CARGO_ALERTA_ID` — cargo avisado em toda compra (padrão: o cargo citado no texto da loja).
+- `LOJA_CANAL_REGISTRO_ID`, `LOJA_CARGO_ASSINANTE_1_ID`, `LOJA_CARGO_ASSINANTE_2_ID` — canal do registro público e cargos de assinante (opcionais: já vêm com os valores do servidor).
 
 O bot precisa da permissão **Gerenciar Canais**. Os itens e preços ficam em `loja.py` (`PAGINAS`). O contador de compras fica em `store_data.json`.
 
@@ -192,7 +221,7 @@ python -m pytest tests                         # tudo que roda offline: unitári
 RUN_INTEGRATION=1 python -m pytest tests       # inclui os testes contra o Firebase REAL
 python -m pytest tests -m "not browser"        # sem abrir o Chrome
 python -m pytest tests/test_carga.py -s        # pico de uso, mostrando os números medidos
-python -m bandit -r bot.py loja.py loja_dados.py pix.py tools    # análise estática de segurança
+python -m bandit -r bot.py loja.py loja_dados.py beneficios.py pix.py tools    # análise estática de segurança
 python -m pip_audit -r requirements.txt                          # vulnerabilidades conhecidas nas dependências
 ```
 
@@ -208,6 +237,8 @@ python -m pip_audit -r requirements.txt                          # vulnerabilida
 | `tests/test_catalogo.py` | catálogo: validação de documentos, montagem das páginas, semeadura e sincronização ao vivo |
 | `tests/test_catalogo_loja.py` | a loja do Discord com o catálogo mudando: telas, checkout seguro, concorrência, níveis de acesso |
 | `tests/test_editor_catalogo.py` | a aba de edição no Chrome (demonstração): criar, editar, mover, excluir, limites, só-visualização |
+| `tests/test_registro_publico.py` | o registro público: conteúdo do embed, sem vazar dados, edição na entrega, sem duplicar, falhas e retomada |
+| `tests/test_beneficios.py` | benefícios mensais: 1 por mês, concorrência, reinício do bot, escolhas forjadas, recuperação e mensagens de erro |
 | `tests/test_integracao.py` | Firebase real: ciclo completo, carga, regras com usuários reais |
 | `tests/test_editor_e2e_real.py` | o painel no Chrome logado como editor, contra o Firebase real |
 

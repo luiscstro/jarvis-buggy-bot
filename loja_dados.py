@@ -40,6 +40,7 @@ import asyncio
 
 COLECAO_PEDIDOS = "loja_pedidos"
 COLECAO_META = "loja_meta"
+COLECAO_BENEFICIOS = "loja_beneficios"  # um documento por jogador e mês: a trava de "1 resgate por mês"
 COLECAO_STAFF = "loja_staff"  # e-mails autorizados a abrir o painel web (id do documento = e-mail)
 DOC_META = "estado"
 TENTATIVAS = 4
@@ -137,6 +138,30 @@ class FirestoreRemoto:
         existia = doc.get().exists
         doc.delete()
         return existia
+
+    # ---------- benefícios mensais (a trava de 1 resgate por mês mora aqui, no servidor) ----------
+    def reservar_beneficio(self, chave: str, dados: dict) -> bool:
+        """Cria o documento do resgate. O servidor recusa de forma ATÔMICA se ele já existir: devolve False nesse caso."""
+        from google.api_core.exceptions import AlreadyExists
+        try:
+            self.cliente.collection(COLECAO_BENEFICIOS).document(chave).create(dados)
+        except AlreadyExists:
+            return False
+        return True
+
+    def ler_beneficio(self, chave: str) -> Optional[dict]:
+        doc = self.cliente.collection(COLECAO_BENEFICIOS).document(chave).get()
+        return doc.to_dict() if doc.exists else None
+
+    def atualizar_beneficio(self, chave: str, campos: dict):
+        self.cliente.collection(COLECAO_BENEFICIOS).document(chave).update(campos)
+
+    def liberar_beneficio(self, chave: str):
+        """Devolve a vez ao jogador (só quando NADA foi criado para ele)."""
+        self.cliente.collection(COLECAO_BENEFICIOS).document(chave).delete()
+
+    def listar_beneficios(self) -> list[tuple[str, dict]]:
+        return [(d.id, d.to_dict()) for d in self.cliente.collection(COLECAO_BENEFICIOS).stream()]
 
     def escutar_meta(self, callback):
         """Chama callback a cada mudança do documento de estado (onde fica a época). Devolve algo com unsubscribe()."""

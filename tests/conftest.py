@@ -8,8 +8,10 @@ import copy
 import os
 import sys
 import tempfile
+import threading
 import time
 import types
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -73,6 +75,23 @@ class _DocRef:
             colecao[self.id] = copy.deepcopy(dados)
         self.bd._notificar(self.col)
         self.bd._notificar_doc(self.col, self.id)
+
+    def create(self, dados):
+        """Como o cliente real: falha se o documento já existir (é isto que garante 1 resgate por mês)."""
+        from google.api_core.exceptions import AlreadyExists
+        self.bd._checar("escrita")
+        with self.bd.trava_create:          # no servidor real "verificar e criar" é uma operação única e atômica
+            if self.id in self.bd.cols.get(self.col, {}):
+                raise AlreadyExists("documento já existe")
+            self.set(dados)
+
+    def update(self, campos):
+        from google.api_core.exceptions import NotFound
+        self.bd._checar("escrita")
+        existente = self.bd.cols.get(self.col, {}).get(self.id)
+        if existente is None:
+            raise NotFound("documento não existe")
+        self.set({**existente, **campos})
 
     def on_snapshot(self, callback):
         """Como o cliente real: entrega o estado atual do documento de imediato e de novo a cada mudança."""
@@ -142,6 +161,7 @@ class FakeFirestore:
         self.latencia = 0.0     # segundos por escrita
         self.escritas = 0
         self.escutas: list = []  # (coleção, callback) de quem usou on_snapshot numa coleção
+        self.trava_create = threading.Lock()
         self.escutas_doc: list = []  # (coleção, id, callback) de quem usou on_snapshot num documento
 
     def _notificar_doc(self, colecao, id_):
@@ -165,7 +185,7 @@ class FakeFirestore:
 
 
 # =============================================================== Discord falso
-def membro(uid=100, nome="Jogador", username=None, cargos=()):
+def membro(uid=100, nome="Jogador", username=None, cargos=(), cargo_ids=()):
     m = MagicMock(spec=discord.Member)
     m.id = uid
     m.display_name = nome
@@ -176,6 +196,11 @@ def membro(uid=100, nome="Jogador", username=None, cargos=()):
     for c in cargos:
         r = MagicMock()
         r.name = c
+        roles.append(r)
+    for cid in cargo_ids:
+        r = MagicMock()
+        r.id = cid
+        r.name = f"cargo-{cid}"
         roles.append(r)
     m.roles = roles
     return m
@@ -191,7 +216,7 @@ def guild_falso(sleep=False):
     g.default_role = MagicMock(name="default_role")
     g.me = MagicMock(name="bot")
     g.get_role.return_value = None
-    g.get_channel.return_value = None
+    g.id = 4242
     contador = {"n": 0}
 
     async def criar(nome, **kwargs):
@@ -201,6 +226,7 @@ def guild_falso(sleep=False):
         canal = MagicMock()
         canal.id = 5000 + contador["n"]
         canal.name = nome
+        canal.topic = kwargs.get("topic")
         canal.mention = f"<#{canal.id}>"
         canal.send = AsyncMock()
         canal.delete = AsyncMock()
@@ -208,6 +234,8 @@ def guild_falso(sleep=False):
         return canal
 
     g.canais = []
+    g.text_channels = g.canais                      # a mesma lista: o bot procura canais antigos pelo tópico
+    g.get_channel.side_effect = lambda cid: next((c for c in g.canais if c.id == cid), None)
     g.create_text_channel = AsyncMock(side_effect=criar)
     return g
 
@@ -215,6 +243,7 @@ def guild_falso(sleep=False):
 def interacao(user, guild, sleep=False):
     i = MagicMock()
     i.guild, i.user = guild, user
+    i.created_at = datetime(2026, 10, 16, 15, 0, tzinfo=timezone.utc)
 
     async def adiar(*a, **k):
         if sleep:
@@ -344,3 +373,65 @@ def catalogo_padrao_restaurado():
     loja.aplicar_catalogo(*catalogo.catalogo_padrao(), "padrao")
     yield
     loja.aplicar_catalogo(*catalogo.catalogo_padrao(), "padrao")
+
+
+# =============================================================== canal público de registro (falso)
+class MensagemFalsa:
+    def __init__(self, id_, embed, autor_id):
+        self.id = id_
+        self.embeds = [embed]
+        self.author = types.SimpleNamespace(id=autor_id)
+
+    async def edit(self, embed=None, **k):
+        if getattr(self, "falha_edicao", None):
+            raise self.falha_edicao
+        if embed is not None:
+            self.embeds = [embed]
+
+
+class CanalRegistro:
+    """Imita o canal onde o bot registra as compras: guarda as mensagens, aceita edição e falhas injetadas."""
+
+    def __init__(self, bot_id=999):
+        import beneficios
+        self.id = beneficios.REGISTRO_CANAL_ID
+        self.mention = f"<#{self.id}>"
+        self.bot_id = bot_id
+        self.mensagens: list[MensagemFalsa] = []
+        self.falhar = None                 # exceção a levantar ao enviar
+        self.envios = 0
+        self.guild = MagicMock()
+        self.guild.get_member.return_value = None
+
+    async def send(self, **kw):
+        self.envios += 1
+        if self.falhar:
+            raise self.falhar
+        m = MensagemFalsa(7000 + len(self.mensagens) + 1, kw["embed"], self.bot_id)
+        self.mensagens.append(m)
+        self.ultimos_kwargs = kw
+        return m
+
+    async def history(self, limit=100):
+        for m in reversed(self.mensagens):
+            yield m
+
+    async def fetch_message(self, id_):
+        for m in self.mensagens:
+            if m.id == id_:
+                return m
+        raise discord.NotFound(MagicMock(status=404, reason="x"), "mensagem não existe")
+
+
+def ligar_registro(cog, canal=None):
+    """Faz o bot do cog enxergar o canal de registro falso. Devolve o canal."""
+    canal = canal or CanalRegistro()
+    cog.bot.user = types.SimpleNamespace(id=canal.bot_id)
+    cog.bot.get_channel = lambda id_: canal if id_ == canal.id else None
+    cog.bot.fetch_channel = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404, reason="x"), "canal não existe"))
+    return canal
+
+
+@pytest.fixture
+def registro(cog):
+    return ligar_registro(cog)
