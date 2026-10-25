@@ -26,6 +26,7 @@ from discord import ui
 from discord.ext import commands
 
 import pix
+from beneficios import (BeneficiosMixin, GACHA_A_CADA_CENTAVOS, REGISTRO_CANAL_ID, NIVEIS, gachas)
 from catalogo import CatalogoSync, assinatura_precos, brl, catalogo_padrao
 from loja_dados import Armazenamento, agora_iso
 
@@ -129,6 +130,10 @@ class PainelLojaView(ui.View):
     async def abrir(self, interaction: discord.Interaction, button: ui.Button):
         view = LojaView(self.cog, interaction.user)
         await interaction.response.send_message(embeds=view.embeds(), view=view, ephemeral=True)
+
+    @ui.button(label="Benefícios do mês", emoji="🎁", style=discord.ButtonStyle.success, custom_id="loja:beneficios")
+    async def beneficios(self, interaction: discord.Interaction, button: ui.Button):
+        await self.cog.abrir_beneficios(interaction)
 
 
 # =============================================
@@ -361,17 +366,56 @@ class CompraView(ui.View):
 # =============================================
 #  COG
 # =============================================
-class LojaCog(commands.Cog):
+class LojaCog(BeneficiosMixin, commands.Cog):
     def __init__(self, bot: commands.Bot, staff_roles: list[str], armazenamento: Armazenamento):
         self.bot = bot
         self.staff_roles = staff_roles
         self.armazenamento = armazenamento
         self.catalogo_sync: Optional[CatalogoSync] = None
         self.lock = asyncio.Lock()
+        self._iniciar_beneficios()
 
     async def cog_unload(self):
+        self._parar_manutencao()
         if self.catalogo_sync:
             self.catalogo_sync.parar()
+
+    # ---------- apoio para a lógica de benefícios e do ticket ----------
+    @staticmethod
+    def _itens() -> dict:
+        return ITENS
+
+    @staticmethod
+    def _slug(nome: str) -> str:
+        return slug_nick(nome)
+
+    def _overwrites_ticket(self, guild: discord.Guild, membro: discord.Member):
+        """Permissões do canal privado de uma compra: só o comprador, o bot e a staff. Devolve (overwrites, cargos de acesso)."""
+        cargos_staff = [r for r in (discord.utils.get(guild.roles, name=n) for n in self.staff_roles) if r]
+        cargo_alerta = guild.get_role(LOJA_CARGO_ALERTA_ID) if LOJA_CARGO_ALERTA_ID else None
+        cargos_acesso = list({r.id: r for r in cargos_staff + ([cargo_alerta] if cargo_alerta else [])}.values())
+
+        def acesso(**extra) -> discord.PermissionOverwrite:
+            return discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True,
+                attach_files=True, embed_links=True, **extra,
+            )
+
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            guild.me: discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True,
+                embed_links=True, manage_channels=True,
+            ),
+            membro: acesso(),
+            **{r: acesso(manage_messages=True) for r in cargos_acesso},
+        }
+        return overwrites, cargos_acesso
+
+    @staticmethod
+    def _categoria(guild: discord.Guild):
+        categoria = guild.get_channel(LOJA_CATEGORIA_ID) if LOJA_CATEGORIA_ID else None
+        return categoria if isinstance(categoria, discord.CategoryChannel) else None
 
     async def cog_load(self):
         self.bot.add_view(PainelLojaView(self))
@@ -380,6 +424,7 @@ class LojaCog(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         await self._remover_painel_antigo()
+        self._iniciar_manutencao()      # retoma anúncios e resgates que ficaram pela metade, agora e a cada 2 minutos
 
     async def _remover_painel_antigo(self):
         """O painel de compras agora é web: apaga a mensagem do painel antigo do Discord, se existir."""
@@ -489,8 +534,30 @@ class LojaCog(commands.Cog):
             linhas.append(f"🔄 Última gravação no Firebase: {ultima} · na fila: **{st['pendentes']}**")
             if st["ultimo_erro"]:
                 linhas.append(f"❌ Último erro: `{st['ultimo_erro'][:200]}`")
-        linhas += self._diagnostico_catalogo() + self._diagnostico_pix() + self._diagnostico_permissoes(ctx.guild)
+        linhas += self._diagnostico_catalogo() + self._diagnostico_pix() + self._diagnostico_permissoes(ctx.guild) + self._diagnostico_registro(ctx.guild)
         await ctx.send("\n".join(linhas))
+
+    def _diagnostico_registro(self, guild: Optional[discord.Guild]) -> list[str]:
+        """Canal público de registro das compras e cargos dos benefícios mensais."""
+        linhas = []
+        canal = self.bot.get_channel(REGISTRO_CANAL_ID) if REGISTRO_CANAL_ID else None
+        if canal is None:
+            linhas.append(f"❌ **Canal de registro das compras não encontrado** (`{REGISTRO_CANAL_ID}`): os anúncios ficam pendentes.")
+        else:
+            perms = canal.permissions_for(guild.me) if guild else None
+            faltam = [n for a, n in (("send_messages", "Enviar Mensagens"), ("embed_links", "Inserir Links"), ("view_channel", "Ver Canal"),
+                                     ("read_message_history", "Ver Histórico")) if perms is not None and not getattr(perms, a, False)]
+            linhas.append(f"✅ Registro público de compras em {canal.mention}" if not faltam
+                          else f"❌ O bot não pode postar em {canal.mention}: faltam {', '.join(faltam)}.")
+        if guild is not None:
+            for nivel, cfg in NIVEIS.items():
+                if not guild.get_role(cfg["cargo_id"]):
+                    linhas.append(f"⚠️ Cargo da assinatura nível {nivel} não encontrado (`{cfg['cargo_id']}`).")
+        pendentes = sum(1 for p in self.armazenamento.dados["pedidos"].values()
+                        if p.get("status") in ("paga", "entregue") and not p.get("anuncio_msg_id"))
+        if pendentes:
+            linhas.append(f"⏳ {pendentes} compra(s) aprovada(s) ainda sem registro no canal público (o bot tenta de novo sozinho).")
+        return linhas
 
     @staticmethod
     def _diagnostico_catalogo() -> list[str]:
@@ -563,8 +630,13 @@ class LojaCog(commands.Cog):
             if atual != "aguardando_pagamento":
                 await interaction.response.send_message(f"ℹ️ Esta compra já está: **{STATUS[atual]}**.", ephemeral=True)
                 return
-            campos = {"status": "paga", "pago_em": agora_iso(), "atualizado_por": autor}
+            agora = agora_iso()
+            campos = {"status": "paga", "pago_em": agora, "atualizado_por": autor, "aprovado_em": agora,
+                      "aprovado_por_id": interaction.user.id, "aprovado_por_nome": interaction.user.display_name}
             aviso = f"💰 Pagamento confirmado por {interaction.user.mention}. A entrega será feita aqui neste canal."
+            n_gachas = gachas(pedido.get("total_centavos", 0))
+            if n_gachas:
+                aviso += f"\n🎰 Você ganhou **{n_gachas} gacha(s)** com esta compra (1 a cada {brl(GACHA_A_CADA_CENTAVOS)})!"
         else:
             if atual == "aguardando_pagamento":
                 await interaction.response.send_message("⚠️ Marque a compra como **paga** antes de entregar.", ephemeral=True)
@@ -572,7 +644,8 @@ class LojaCog(commands.Cog):
             if atual != "paga":
                 await interaction.response.send_message(f"ℹ️ Esta compra já está: **{STATUS[atual]}**.", ephemeral=True)
                 return
-            campos = {"status": "entregue", "entregue_em": agora_iso(), "atualizado_por": autor}
+            campos = {"status": "entregue", "entregue_em": agora_iso(), "atualizado_por": autor,
+                      "entregue_por_id": interaction.user.id, "entregue_por_nome": interaction.user.display_name}
             aviso = f"📦 Compra marcada como **entregue** por {interaction.user.mention}. Obrigado por apoiar o servidor! 🤡"
 
         self.armazenamento.atualizar(chave, **campos)
@@ -584,6 +657,11 @@ class LojaCog(commands.Cog):
                 resumo.set_field_at(n, name="Status", value=STATUS[campos["status"]], inline=False)
         await interaction.response.edit_message(embeds=[resumo], attachments=[], view=CompraView(self))
         await interaction.channel.send(aviso)
+        # Registro público (para os jogadores conferirem). Nunca levanta erro: se falhar, fica pendente e é retomado depois.
+        if novo == "paga":
+            await self.anunciar_compra(chave)
+        else:
+            await self.atualizar_anuncio(chave)
 
     async def fechar_compra(self, interaction: discord.Interaction):
         achado = await self._compra_do_canal(interaction)
@@ -628,28 +706,8 @@ class LojaCog(commands.Cog):
         guild = interaction.guild
         membro = interaction.user
 
-        cargos_staff = [r for r in (discord.utils.get(guild.roles, name=n) for n in self.staff_roles) if r]
-        cargo_alerta = guild.get_role(LOJA_CARGO_ALERTA_ID) if LOJA_CARGO_ALERTA_ID else None
-        cargos_acesso = list({r.id: r for r in cargos_staff + ([cargo_alerta] if cargo_alerta else [])}.values())
-
-        def acesso(**extra) -> discord.PermissionOverwrite:
-            return discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, read_message_history=True,
-                attach_files=True, embed_links=True, **extra,
-            )
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            guild.me: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, read_message_history=True,
-                embed_links=True, manage_channels=True,
-            ),
-            membro: acesso(),
-            **{r: acesso(manage_messages=True) for r in cargos_acesso},
-        }
-        categoria = guild.get_channel(LOJA_CATEGORIA_ID) if LOJA_CATEGORIA_ID else None
-        if not isinstance(categoria, discord.CategoryChannel):
-            categoria = None
+        overwrites, cargos_acesso = self._overwrites_ticket(guild, membro)
+        categoria = self._categoria(guild)
 
         async with self.lock:
             # A contagem precisa ficar DENTRO da trava: fora dela, vários pedidos da mesma pessoa

@@ -272,7 +272,7 @@ def _config_web():
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("colecao", ["loja_pedidos", "loja_meta", "loja_staff"])
+@pytest.mark.parametrize("colecao", ["loja_pedidos", "loja_meta", "loja_staff", "loja_beneficios"])
 def test_banco_real_recusa_leitura_anonima(colecao):
     import requests
     c = _config_web()
@@ -281,7 +281,7 @@ def test_banco_real_recusa_leitura_anonima(colecao):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("colecao", ["loja_pedidos", "loja_meta", "loja_staff"])
+@pytest.mark.parametrize("colecao", ["loja_pedidos", "loja_meta", "loja_staff", "loja_beneficios"])
 def test_banco_real_recusa_escrita_anonima(colecao):
     import requests
     c = _config_web()

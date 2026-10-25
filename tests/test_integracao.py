@@ -62,19 +62,74 @@ def remoto(cred, monkeypatch):
     sufixo = uuid.uuid4().hex[:8]
     monkeypatch.setattr(ld, "COLECAO_PEDIDOS", f"teste_pedidos_{sufixo}")
     monkeypatch.setattr(ld, "COLECAO_META", f"teste_meta_{sufixo}")
+    monkeypatch.setattr(ld, "COLECAO_BENEFICIOS", f"teste_beneficios_{sufixo}")
     import catalogo
     monkeypatch.setattr(catalogo, "COLECAO_ITENS", f"teste_itens_{sufixo}")
     monkeypatch.setattr(catalogo, "COLECAO_PAGINAS", f"teste_paginas_{sufixo}")
     cliente = firestore.Client(project=cred["project_id"], credentials=service_account.Credentials.from_service_account_info(cred))
     r = ld.FirestoreRemoto(cliente)
     yield r
-    for col in (ld.COLECAO_PEDIDOS, ld.COLECAO_META, catalogo.COLECAO_ITENS, catalogo.COLECAO_PAGINAS):
+    for col in (ld.COLECAO_PEDIDOS, ld.COLECAO_META, ld.COLECAO_BENEFICIOS, catalogo.COLECAO_ITENS, catalogo.COLECAO_PAGINAS):
         for d in cliente.collection(col).stream():
             d.reference.delete()
 
 
 def _vazio(remoto):
     return all(not list(remoto.cliente.collection(c).stream()) for c in (ld.COLECAO_PEDIDOS, ld.COLECAO_META))
+
+
+# ---------------------------------------------------------------- benefícios mensais no Firestore real
+def test_reserva_do_beneficio_e_atomica_no_firestore_real(remoto):
+    """40 tentativas simultâneas de reservar o mesmo mês do mesmo jogador: o servidor deixa passar exatamente uma."""
+    chave = "2026-10-777"
+    resultados, erros = [], []
+
+    def tentar(i):
+        try:
+            resultados.append(remoto.reservar_beneficio(chave, {"usuario_id": 777, "estado": "reservado", "tentativa": i}))
+        except Exception as e:  # noqa: BLE001
+            erros.append(e)
+    ts = [threading.Thread(target=tentar, args=(i,)) for i in range(40)]
+    [t.start() for t in ts]; [t.join() for t in ts]
+    assert not erros and resultados.count(True) == 1 and resultados.count(False) == 39
+    assert remoto.ler_beneficio(chave)["estado"] == "reservado"
+    remoto.atualizar_beneficio(chave, {"estado": "concluido"})
+    assert remoto.ler_beneficio(chave)["estado"] == "concluido" and remoto.reservar_beneficio(chave, {"x": 1}) is False
+    assert remoto.reservar_beneficio("2026-11-777", {"x": 1}) is True                 # outro mês, outra vaga
+    assert remoto.reservar_beneficio("2026-10-778", {"x": 1}) is True                 # outro jogador, outra vaga
+    assert {c for c, _ in remoto.listar_beneficios()} == {chave, "2026-11-777", "2026-10-778"}
+    remoto.liberar_beneficio(chave)
+    assert remoto.ler_beneficio(chave) is None and remoto.reservar_beneficio(chave, {"x": 1}) is True
+
+
+def test_resgates_simultaneos_pela_loja_no_firestore_real(remoto, tmp_path):
+    """Dois bots (duas instâncias) e vários cliques ao mesmo tempo no Firestore real: um único resgate."""
+    import beneficios as ben, loja
+    from conftest import guild_falso, interacao, membro, CanalRegistro, ligar_registro
+    from unittest.mock import MagicMock
+    bot = MagicMock(); g = guild_falso(); bot.get_guild = lambda gid: g
+    cogs = []
+    for i in range(2):
+        arm = ld.Armazenamento(str(tmp_path / f"b{i}.json"), remoto); arm.sincronizar_inicio()
+        cogs.append(loja.LojaCog(bot, ["Developer"], arm))
+    ligar_registro(cogs[0], CanalRegistro())
+    user = membro(901, "Real", cargo_ids=[ben.CARGO_ASSINANTE_1_ID])
+
+    async def corrida():
+        async def um(cog):
+            v = ben.BeneficioView(cog, user, 1, "2026-10"); v.escolhas = ["sorte"]
+            i = interacao(user, g, True)
+            from datetime import datetime, timezone
+            i.created_at = datetime(2026, 10, 16, 15, tzinfo=timezone.utc)
+            await cog.resgatar_beneficio(i, v)
+        await asyncio.gather(*[um(c) for c in cogs * 6])
+    asyncio.run(corrida())
+    docs = {c: d for c, d in remoto.listar_beneficios()}
+    assert list(docs) == ["2026-10-901"] and docs["2026-10-901"]["estado"] == "concluido"
+    assert len(g.canais) == 1
+    for c in cogs:
+        drenar(c.armazenamento)
+    assert len(list(remoto.cliente.collection(ld.COLECAO_PEDIDOS).stream())) == 1
 
 
 # ---------------------------------------------------------------- ciclo de vida real
@@ -288,6 +343,10 @@ def test_regras_de_leitura_com_usuarios_reais(usuarios, fs):
         ("a lista de e-mails autorizados fica fechada", get("loja_staff", "editor"), 403),
         ("quem está fora da lista não descobre se existe registro de outro", get(f"loja_staff/{em['staff']}", "fora"), 403),
         ("coleção desconhecida fechada", get("qualquer_coisa/x", "editor"), 403),
+        ("travas dos benefícios mensais: staff não lê", get("loja_beneficios/2026-10-1", "staff"), 403),
+        ("travas dos benefícios mensais: editor não lê a lista", get("loja_beneficios", "editor"), 403),
+        ("travas dos benefícios mensais: ninguém cria pelo navegador", requests.post(f"{fs}/loja_beneficios?documentId=zz-novo", json=corpo, headers=_h(tok["editor"]), timeout=30).status_code, 403),
+        ("travas dos benefícios mensais: ninguém apaga pelo navegador", requests.delete(f"{fs}/loja_beneficios/2026-10-1", headers=_h(tok["editor"]), timeout=30).status_code, 403),
         ("staff não cria pedido", requests.post(f"{fs}/loja_pedidos?documentId=zz-novo", json=corpo, headers=_h(tok["staff"]), timeout=30).status_code, 403),
         ("EDITOR também não cria pedido", requests.post(f"{fs}/loja_pedidos?documentId=zz-novo", json=corpo, headers=_h(tok["editor"]), timeout=30).status_code, 403),
         ("editor não altera pedido", requests.patch(f"{fs}/{DOC}", json=corpo, headers=_h(tok["editor"]), timeout=30).status_code, 403),
