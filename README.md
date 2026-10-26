@@ -114,7 +114,7 @@ Para entrar no **modo admin**, use o prefixo `admin:` após a menção:
 
 ### Opção fixa "Indicação" (grátis)
 
-Toda loja tem, em todas as páginas, a opção **🤝 Indicação** de **R$ 0,00**, para quem indicou alguém ao servidor (ou veio por indicação). Ela fica no código (`catalogo.py`), não no Firebase: por isso o painel não a edita nem apaga, e nem um item do banco com o mesmo nome a substitui. A compra só com ela abre o canal privado **sem PIX**, pedindo para a pessoa informar quem indicou; a staff confere e aprova, e o registro público sai como "🤝 Indicação #NN aprovada" (sem gacha). Se vier junto com itens pagos, o PIX cobra só os itens pagos. Ela **nunca** aparece entre os VIPs à escolha dos benefícios mensais.
+Toda loja tem, em todas as páginas, a opção **🤝 Indicação / Nitro** de **R$ 0,00**, para quem indicou alguém ao servidor (ou veio por indicação). Ela fica no código (`catalogo.py`), não no Firebase: por isso o painel não a edita nem apaga, e nem um item do banco com o mesmo nome a substitui. A compra só com ela abre o canal privado **sem PIX**, pedindo para a pessoa informar quem indicou; a staff confere e aprova, e o registro público sai como "🤝 Indicação #NN aprovada" (sem gacha). Se vier junto com itens pagos, o PIX cobra só os itens pagos. Ela **nunca** aparece entre os VIPs à escolha dos benefícios mensais.
 
 ### Registro público das compras e gachas
 

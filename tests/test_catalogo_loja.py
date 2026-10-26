@@ -51,7 +51,7 @@ def test_tela_reflete_itens_precos_e_paginas_do_catalogo_atual():
     botoes = [c for c in v.children if isinstance(c, loja.PaginaButton)]
     assert [b.label for b in botoes] == ["Página 1", "Página 2"]
     menu = next(c for c in v.children if isinstance(c, loja.AdicionarSelect))
-    assert [(o.label, o.description) for o in menu.options] == [("Indicação", "Grátis — opção fixa, para indicações"), ("Alfa", "R$ 12,34 — Página 1"), ("Beta", "R$ 0,99 — Página 2")]
+    assert [(o.label, o.description) for o in menu.options] == [("Indicação / Nitro", "Grátis — opção fixa, para indicações"), ("Alfa", "R$ 12,34 — Página 1"), ("Beta", "R$ 0,99 — Página 2")]
     assert "## 🔷 Alfa - R$ 12,34" in v.embeds()[0].description and v.embeds()[0].description.startswith("Bem-vindo")
 
 

@@ -51,7 +51,7 @@ def preco_txt(centavos: int) -> str:
 # acrescentada ao catálogo. Nunca entra nos VIPs à escolha dos planos mensais.
 CHAVE_INDICACAO = "indicacao"
 ITEM_INDICACAO = {
-    "key": CHAVE_INDICACAO, "nome": "Indicação", "preco": 0, "ativo": True, "fixo": True,
+    "key": CHAVE_INDICACAO, "nome": "Indicação / Nitro", "preco": 0, "ativo": True, "fixo": True,
     "descricao": "Indicou alguém para o servidor (ou veio por indicação)? Escolha esta opção, sem custo: "
                  "o canal da compra abre para você informar o nome de quem indicou e a staff conferir.",
 }
