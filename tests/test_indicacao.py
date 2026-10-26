@@ -38,7 +38,7 @@ def test_continua_la_mesmo_com_o_catalogo_vazio_ou_trocado():
 
 def test_item_do_banco_com_o_mesmo_nome_nao_a_substitui():
     trocar({"p1": {"ordem": 1, "introducao": ""}}, {"indicacao": doc("Indicação cara", 5000)})
-    assert loja.ITENS["indicacao"]["preco"] == 0 and loja.ITENS["indicacao"]["nome"] == "Indicação"
+    assert loja.ITENS["indicacao"]["preco"] == 0 and loja.ITENS["indicacao"]["nome"] == "Indicação / Nitro"
     menu = next(c for c in loja.LojaView(None, membro()).children if isinstance(c, loja.AdicionarSelect))
     assert [o.value for o in menu.options].count("indicacao") == 1
 
@@ -47,7 +47,7 @@ def test_e_a_primeira_do_menu_e_aparece_em_todas_as_paginas():
     trocar({"p1": {"ordem": 1, "introducao": ""}, "p2": {"ordem": 2, "introducao": ""}}, {"a": doc("A", 500, "p1"), "b": doc("B", 700, "p2")})
     v = loja.LojaView(None, membro())
     menu = next(c for c in v.children if isinstance(c, loja.AdicionarSelect))
-    assert [o.label for o in menu.options] == ["Indicação", "A", "B"] and menu.options[0].description.startswith("Grátis")
+    assert [o.label for o in menu.options] == ["Indicação / Nitro", "A", "B"] and menu.options[0].description.startswith("Grátis")
     for n in (0, 1):
         v.pagina = n
         assert "Indicação" in v.embeds()[0].fields[0].name and "Grátis" in v.embeds()[0].fields[0].name
@@ -62,7 +62,7 @@ def test_menu_nunca_passa_de_25_opcoes_com_a_opcao_fixa():
 
 def test_preco_aparece_como_gratis():
     assert cat.preco_txt(0) == "Grátis" and cat.preco_txt(500) == "R$ 5,00"
-    assert loja.linhas_carrinho({"indicacao": 2}) == "**2x** Indicação — Grátis"
+    assert loja.linhas_carrinho({"indicacao": 2}) == "**2x** Indicação / Nitro — Grátis"
     v = loja.LojaView(None, membro())
     v.carrinho = {"indicacao": 1}
     assert v.embeds()[1].footer.text == "Total: Grátis"
@@ -74,7 +74,7 @@ def test_so_indicacao_abre_o_canal_sem_pix(cog):
     assert "criada" in inter.edit_original_response.call_args.kwargs["content"]
     ped = cog.armazenamento.dados["pedidos"]["01"]
     assert ped["total_centavos"] == 0 and ped["status"] == "aguardando_pagamento"
-    assert ped["itens_detalhe"] == [{"nome": "Indicação", "qtd": 1, "preco_centavos": 0}]
+    assert ped["itens_detalhe"] == [{"nome": "Indicação / Nitro", "qtd": 1, "preco_centavos": 0}]
     kw = canal.send.call_args.kwargs
     assert len(kw["embeds"]) == 1 and not kw.get("files")                       # sem QR e sem PIX
     resumo = kw["embeds"][0]
@@ -89,7 +89,7 @@ def test_compra_mista_cobra_so_o_que_tem_preco_e_mantem_o_pix(cog):
     assert ped["total_centavos"] == 1000
     kw = canal.send.call_args.kwargs
     assert len(kw["embeds"]) == 2 and PIX_TESTE[:20] in kw["embeds"][1].fields[1].value
-    assert "Indicação — Grátis" in kw["embeds"][0].description and "R$ 10,00" in kw["embeds"][0].description
+    assert "Indicação / Nitro — Grátis" in kw["embeds"][0].description and "R$ 10,00" in kw["embeds"][0].description
 
 
 def test_aprovar_indicacao_nao_fala_em_pagamento_nem_em_gacha_e_vai_para_o_registro(cog, registro):
