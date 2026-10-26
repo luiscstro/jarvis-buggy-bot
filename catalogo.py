@@ -42,6 +42,26 @@ def brl(centavos: int) -> str:
     return f"R$ {centavos // 100},{centavos % 100:02d}"
 
 
+def preco_txt(centavos: int) -> str:
+    """Preço para mostrar a quem compra: o item de R$ 0,00 aparece como 'Grátis'."""
+    return "Grátis" if centavos == 0 else brl(centavos)
+
+
+# Opção FIXA da loja, de R$ 0,00. Não mora no banco (por isso o painel não edita nem apaga) e é sempre
+# acrescentada ao catálogo. Nunca entra nos VIPs à escolha dos planos mensais.
+CHAVE_INDICACAO = "indicacao"
+ITEM_INDICACAO = {
+    "key": CHAVE_INDICACAO, "nome": "Indicação", "preco": 0, "ativo": True, "fixo": True,
+    "descricao": "Indicou alguém para o servidor (ou veio por indicação)? Escolha esta opção, sem custo: "
+                 "o canal da compra abre para você informar o nome de quem indicou e a staff conferir.",
+}
+
+
+def com_item_fixo(itens: dict[str, dict]) -> dict[str, dict]:
+    """Catálogo + a opção fixa de indicação (ela vence qualquer item do banco com a mesma chave)."""
+    return {**{k: v for k, v in itens.items() if k != CHAVE_INDICACAO}, CHAVE_INDICACAO: dict(ITEM_INDICACAO)}
+
+
 def _inteiro(v) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
 

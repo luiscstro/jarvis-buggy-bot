@@ -27,7 +27,8 @@ from discord.ext import commands
 
 import pix
 from beneficios import (BeneficiosMixin, GACHA_A_CADA_CENTAVOS, REGISTRO_CANAL_ID, NIVEIS, gachas)
-from catalogo import CatalogoSync, assinatura_precos, brl, catalogo_padrao
+from catalogo import (CHAVE_INDICACAO, ITEM_INDICACAO, CatalogoSync, assinatura_precos, brl, catalogo_padrao,
+                      com_item_fixo, preco_txt)
 from loja_dados import Armazenamento, agora_iso
 
 # =============================================
@@ -78,6 +79,7 @@ STATUS = {
 # PAGINAS e ITENS são trocados por inteiro, de uma vez, quando a staff edita o catálogo. As telas conferem
 # o catálogo a cada clique e nunca confiam numa cópia antiga (veja LojaView._sincronizar e criar_compra).
 PAGINAS, ITENS = catalogo_padrao()
+ITENS = com_item_fixo(ITENS)
 ASSINATURA = assinatura_precos(ITENS)    # muda quando um preço muda ou um item entra/sai
 CATALOGO_FONTE = "padrao"                # "firebase" | "cache" | "padrao"
 
@@ -85,8 +87,8 @@ CATALOGO_FONTE = "padrao"                # "firebase" | "cache" | "padrao"
 def aplicar_catalogo(paginas: list, itens: dict, fonte: str = "padrao"):
     """Troca o catálogo em uso. Chamada pela sincronização ao vivo, que roda em outra thread."""
     global PAGINAS, ITENS, ASSINATURA, CATALOGO_FONTE
-    ITENS, PAGINAS = itens, paginas
-    ASSINATURA, CATALOGO_FONTE = assinatura_precos(itens), fonte
+    ITENS, PAGINAS = com_item_fixo(itens), paginas
+    ASSINATURA, CATALOGO_FONTE = assinatura_precos(ITENS), fonte
 
 
 # =============================================
@@ -105,13 +107,13 @@ def total_carrinho(carrinho: dict[str, int]) -> int:
 
 def linhas_carrinho(carrinho: dict[str, int]) -> str:
     return "\n".join(
-        f"**{q}x** {ITENS[k]['nome']} — {brl(ITENS[k]['preco'] * q)}" for k, q in carrinho.items() if k in ITENS
+        f"**{q}x** {ITENS[k]['nome']} — {preco_txt(ITENS[k]['preco'] * q)}" for k, q in carrinho.items() if k in ITENS
     )
 
 
 def linhas_detalhes(detalhes: list[dict]) -> str:
     """Linhas do pedido a partir da fotografia tirada na compra (nome e preço daquele momento)."""
-    return "\n".join(f"**{d['qtd']}x** {d['nome']} — {brl(d['preco_centavos'] * d['qtd'])}" for d in detalhes)
+    return "\n".join(f"**{d['qtd']}x** {d['nome']} — {preco_txt(d['preco_centavos'] * d['qtd'])}" for d in detalhes)
 
 
 def epoch(iso: str) -> int:
@@ -162,13 +164,15 @@ class AdicionarSelect(ui.Select):
     """Menu com TODOS os itens da loja, qualquer que seja a página aberta (sem limite de itens)."""
 
     def __init__(self):
-        opcoes = [
+        opcoes = [discord.SelectOption(label=ITEM_INDICACAO["nome"], value=CHAVE_INDICACAO, description="Grátis — opção fixa, para indicações")]
+        opcoes += [
             discord.SelectOption(
                 label=item["nome"][:100], value=item["key"], description=f"{brl(item['preco'])} — Página {n}"
             )
             for n, pagina in enumerate(PAGINAS, start=1)
             for item in pagina["itens"]
-        ][:25]
+            if item["key"] != CHAVE_INDICACAO
+        ][:24]
         super().__init__(
             placeholder="Escolha os itens que quiser comprar",
             min_values=1,
@@ -330,11 +334,12 @@ class LojaView(ui.View):
             catalogo.set_footer(text=f"Página {indice + 1}/{len(PAGINAS)}")
         else:
             catalogo = discord.Embed(description="🛒 A loja está sem itens no momento. Volte mais tarde!", color=discord.Color.blue())
+        catalogo.add_field(name=f"🤝 {ITEM_INDICACAO['nome']} — Grátis (em todas as páginas)", value=ITEM_INDICACAO["descricao"], inline=False)
 
         carrinho = discord.Embed(title="🛒 Seu carrinho", color=discord.Color.green())
         if self.carrinho:
             carrinho.description = linhas_carrinho(self.carrinho)
-            carrinho.set_footer(text=f"Total: {brl(total_carrinho(self.carrinho))}")
+            carrinho.set_footer(text=f"Total: {preco_txt(total_carrinho(self.carrinho))}")
         else:
             carrinho.description = "Vazio. Escolha itens no menu abaixo e informe as quantidades." if ITENS else "Vazio."
         return [catalogo, carrinho]
@@ -564,7 +569,7 @@ class LojaCog(BeneficiosMixin, commands.Cog):
         fonte = {"firebase": "✅ Firebase, ao vivo (editado pelo painel)",
                  "cache": "⚠️ cópia local (o Firebase não respondeu na partida)",
                  "padrao": "⚠️ catálogo padrão do código (sem Firebase e sem cópia local)"}.get(CATALOGO_FONTE, CATALOGO_FONTE)
-        return [f"📚 Catálogo: **{len(ITENS)}** item(ns) em **{len(PAGINAS)}** página(s) — {fonte}"]
+        return [f"📚 Catálogo: **{sum(1 for i in ITENS.values() if not i.get('fixo'))}** item(ns) em **{len(PAGINAS)}** página(s) — {fonte}"]
 
     @staticmethod
     def _diagnostico_pix() -> list[str]:
@@ -633,7 +638,8 @@ class LojaCog(BeneficiosMixin, commands.Cog):
             agora = agora_iso()
             campos = {"status": "paga", "pago_em": agora, "atualizado_por": autor, "aprovado_em": agora,
                       "aprovado_por_id": interaction.user.id, "aprovado_por_nome": interaction.user.display_name}
-            aviso = f"💰 Pagamento confirmado por {interaction.user.mention}. A entrega será feita aqui neste canal."
+            aviso = (f"✅ Aprovado por {interaction.user.mention}. A entrega será feita aqui neste canal." if not pedido.get("total_centavos")
+                     else f"💰 Pagamento confirmado por {interaction.user.mention}. A entrega será feita aqui neste canal.")
             n_gachas = gachas(pedido.get("total_centavos", 0))
             if n_gachas:
                 aviso += f"\n🎰 Você ganhou **{n_gachas} gacha(s)** com esta compra (1 a cada {brl(GACHA_A_CADA_CENTAVOS)})!"
@@ -765,12 +771,16 @@ class LojaCog(BeneficiosMixin, commands.Cog):
             description=linhas_detalhes(detalhes),
             color=discord.Color.green(),
         )
-        embed.add_field(name="Total a pagar", value=f"**{brl(total)}**", inline=False)
+        embed.add_field(name="Total a pagar", value=f"**{preco_txt(total)}**", inline=False)
         embed.add_field(name="Comprador", value=membro.mention, inline=False)
+        if CHAVE_INDICACAO in carrinho:
+            embed.add_field(name="🤝 Indicação", value="Escreva aqui neste canal **quem você indicou** (ou **quem indicou você**): o @ ou o ID da pessoa. A staff confere e aprova.", inline=False)
         embed.add_field(name="Status", value=STATUS["aguardando_pagamento"], inline=False)
 
         embeds, arquivos, embed_pix, codigo = [embed], [], None, ""
-        if PIX_COPIA_COLA:
+        if total == 0:
+            embed.set_footer(text="Compra sem custo: não há nada a pagar. A staff confere e aprova por aqui.")
+        elif PIX_COPIA_COLA:
             codigo = pix.payload_com_valor(PIX_COPIA_COLA, total)
             embed_pix = discord.Embed(
                 title="💳 Pagamento via PIX",
@@ -797,7 +807,7 @@ class LojaCog(BeneficiosMixin, commands.Cog):
             embed.set_footer(text="A staff vai combinar o pagamento e a entrega aqui neste canal.")
 
         mencoes = " ".join([membro.mention] + [r.mention for r in cargos_acesso])
-        texto_simples = f"**Compra {compra_id:02d}** — total **{brl(total)}**\n{linhas_detalhes(detalhes)}"
+        texto_simples = f"**Compra {compra_id:02d}** — total **{preco_txt(total)}**\n{linhas_detalhes(detalhes)}"
         if codigo:
             texto_simples += f"\n\n💳 **PIX copia e cola:**\n```{codigo}```\nDepois envie o comprovante aqui."
         enviado = await self._enviar_ticket(

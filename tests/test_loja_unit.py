@@ -42,8 +42,10 @@ def test_slug_nick_fuzz_sempre_gera_nome_de_canal_valido():
 # ---------------------------------------------------------------- catálogo
 def test_catalogo_chaves_unicas_e_precos_inteiros_positivos():
     chaves = [i["key"] for p in loja.PAGINAS for i in p["itens"]]
-    assert len(chaves) == len(set(chaves)) == len(loja.ITENS) == 12
+    assert len(chaves) == len(set(chaves)) == len(loja.ITENS) - 1 == 12            # +1: a opção fixa de indicação
     for item in loja.ITENS.values():
+        if item.get("fixo"):
+            continue
         assert isinstance(item["preco"], int) and item["preco"] > 0 and item["preco"] % 500 == 0
         assert 0 < len(item["nome"]) <= 100
 
@@ -51,7 +53,8 @@ def test_catalogo_chaves_unicas_e_precos_inteiros_positivos():
 def test_precos_conferem_com_o_texto_da_loja():
     esperado = {"escolhidos": 500, "mudanca": 500, "renascimento": 1500, "manobra": 500, "aviso": 500, "cacador": 1000,
                 "sorte": 1500, "token": 500, "aprendiz": 1000, "lunariano": 2000, "rumores": 500, "supertesouro": 2000}
-    assert {k: v["preco"] for k, v in loja.ITENS.items()} == esperado
+    assert {k: v["preco"] for k, v in loja.ITENS.items() if k != "indicacao"} == esperado
+    assert loja.ITENS["indicacao"]["preco"] == 0
 
 
 def test_descricoes_cabem_nos_limites_do_discord():
@@ -141,12 +144,12 @@ def test_ate_cinco_itens_abre_a_janela_e_mais_que_isso_adiciona_direto():
 
     v.carrinho = {"escolhidos": 4}
     sel2 = next(c for c in v.children if getattr(c, "row", None) == 1)
-    sel2._values = list(loja.ITENS)  # os 12 de uma vez
+    sel2._values = list(loja.ITENS)  # os 12 pagos + a indicação de uma vez
     inter2 = interacao(membro(), None)
     asyncio.run(sel2.callback(inter2))
-    assert len(v.carrinho) == 12 and v.carrinho["escolhidos"] == 4  # o que já tinha não é sobrescrito
+    assert len(v.carrinho) == 13 and v.carrinho["escolhidos"] == 4  # o que já tinha não é sobrescrito
     assert all(q >= 1 for q in v.carrinho.values())
-    assert "12 itens" in inter2.response.edit_message.call_args.kwargs["content"]
+    assert "13 itens" in inter2.response.edit_message.call_args.kwargs["content"]
 
 
 def test_menu_do_carrinho_edita_ate_cinco_por_vez():
@@ -154,7 +157,7 @@ def test_menu_do_carrinho_edita_ate_cinco_por_vez():
     v.carrinho = {k: 1 for k in loja.ITENS}
     v.montar()
     ed = next(c for c in v.children if getattr(c, "row", None) == 2)
-    assert ed.max_values == 5 and len(ed.options) == 12
+    assert ed.max_values == 5 and len(ed.options) == 13
 
 
 def test_botoes_finalizar_e_limpar_dependem_do_carrinho():

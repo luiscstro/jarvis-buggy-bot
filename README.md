@@ -112,6 +112,10 @@ Para entrar no **modo admin**, use o prefixo `admin:` após a menção:
 5. A staff usa os botões do canal: **Marcar como pago**, **Marcar como entregue** e **Fechar compra** (fechar sem pagar marca como cancelada e apaga o canal).
 6. Tudo aparece no painel de compras (site externo, abaixo).
 
+### Opção fixa "Indicação" (grátis)
+
+Toda loja tem, em todas as páginas, a opção **🤝 Indicação** de **R$ 0,00**, para quem indicou alguém ao servidor (ou veio por indicação). Ela fica no código (`catalogo.py`), não no Firebase: por isso o painel não a edita nem apaga, e nem um item do banco com o mesmo nome a substitui. A compra só com ela abre o canal privado **sem PIX**, pedindo para a pessoa informar quem indicou; a staff confere e aprova, e o registro público sai como "🤝 Indicação #NN aprovada" (sem gacha). Se vier junto com itens pagos, o PIX cobra só os itens pagos. Ela **nunca** aparece entre os VIPs à escolha dos benefícios mensais.
+
 ### Registro público das compras e gachas
 
 Toda compra aprovada ("Marcar como pago") é anunciada pelo bot, num embed, no canal de registro (`1563931955207077889`) para os jogadores conferirem (o painel web só a staff vê): número da compra, quem comprou, **quem aprovou**, quando, itens, total, gachas e o estado da entrega. Quando a staff marca como entregue, o mesmo post é **editado** (não duplica). Nunca aparecem o PIX, o link do canal privado nem dados da staff além do nome de quem aprovou.
@@ -238,6 +242,7 @@ python -m pip_audit -r requirements.txt                          # vulnerabilida
 | `tests/test_catalogo_loja.py` | a loja do Discord com o catálogo mudando: telas, checkout seguro, concorrência, níveis de acesso |
 | `tests/test_editor_catalogo.py` | a aba de edição no Chrome (demonstração): criar, editar, mover, excluir, limites, só-visualização |
 | `tests/test_registro_publico.py` | o registro público: conteúdo do embed, sem vazar dados, edição na entrega, sem duplicar, falhas e retomada |
+| `tests/test_indicacao.py` | a opção fixa de indicação (R$ 0): sempre presente, fora do painel e dos planos, compra sem PIX |
 | `tests/test_beneficios.py` | benefícios mensais: 1 por mês, concorrência, reinício do bot, escolhas forjadas, recuperação e mensagens de erro |
 | `tests/test_integracao.py` | Firebase real: ciclo completo, carga, regras com usuários reais |
 | `tests/test_editor_e2e_real.py` | o painel no Chrome logado como editor, contra o Firebase real |
