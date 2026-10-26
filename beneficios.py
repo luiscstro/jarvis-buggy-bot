@@ -113,7 +113,7 @@ def codigo_registro(compra_id: int, criado_em: str, usuario_id: int) -> str:
 
 def opcoes_de_escolha(itens: dict) -> list[dict]:
     """Itens que podem ser escolhidos como VIP do benefício (até R$ 15,00), do mais barato ao mais caro."""
-    elegiveis = [i for i in itens.values() if i["preco"] <= TETO_VIP_CENTAVOS]
+    elegiveis = [i for i in itens.values() if 0 < i["preco"] <= TETO_VIP_CENTAVOS and not i.get("fixo")]   # a Indicação (R$ 0) não é VIP
     return sorted(elegiveis, key=lambda i: (i["preco"], i["nome"]))[:25]
 
 
@@ -165,10 +165,13 @@ def embed_registro(pedido: dict, avatar_url: Optional[str] = None) -> discord.Em
     entregue = pedido.get("status") == "entregue"
     cor = discord.Color.green() if entregue else (discord.Color.purple() if beneficio else discord.Color.gold())
     numero = f"#{int(pedido['id']):02d}"
-    titulo = f"🎁 Benefício mensal {numero} resgatado" if beneficio else f"🧾 Compra {numero} aprovada"
+    gratis = not beneficio and int(pedido.get("total_centavos", 0)) == 0      # só a opção fixa de indicação não tem preço
+    titulo = (f"🎁 Benefício mensal {numero} resgatado" if beneficio
+              else f"🤝 Indicação {numero} aprovada" if gratis else f"🧾 Compra {numero} aprovada")
     embed = discord.Embed(title=titulo, color=cor)
     uid = pedido.get("usuario_id")
     embed.description = (f"<@{uid}> resgatou os benefícios de **{nome_do_ciclo(pedido['ciclo'])}**!" if beneficio and pedido.get("ciclo")
+                         else f"<@{uid}> registrou uma indicação! Obrigado por ajudar o servidor a crescer! 🤡" if gratis
                          else f"<@{uid}> apoiou o servidor! Obrigado! 🤡")
 
     embed.add_field(name="👤 Comprador" if not beneficio else "👤 Assinante", value=f"<@{uid}>\n{pedido.get('nome') or pedido.get('usuario') or '—'}", inline=True)
@@ -187,6 +190,8 @@ def embed_registro(pedido: dict, avatar_url: Optional[str] = None) -> discord.Em
         cargo = f"<@&{pedido['cargo_id']}>" if pedido.get("cargo_id") else "—"
         embed.add_field(name="🏷️ Cargo", value=cargo, inline=True)
         embed.add_field(name="💵 Valor", value="Incluído na assinatura", inline=True)
+    elif gratis:
+        embed.add_field(name="💵 Total", value="**Grátis**", inline=True)
     else:
         total = int(pedido.get("total_centavos", 0))
         n = gachas(total)

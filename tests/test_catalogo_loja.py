@@ -51,7 +51,7 @@ def test_tela_reflete_itens_precos_e_paginas_do_catalogo_atual():
     botoes = [c for c in v.children if isinstance(c, loja.PaginaButton)]
     assert [b.label for b in botoes] == ["Página 1", "Página 2"]
     menu = next(c for c in v.children if isinstance(c, loja.AdicionarSelect))
-    assert [(o.label, o.description) for o in menu.options] == [("Alfa", "R$ 12,34 — Página 1"), ("Beta", "R$ 0,99 — Página 2")]
+    assert [(o.label, o.description) for o in menu.options] == [("Indicação", "Grátis — opção fixa, para indicações"), ("Alfa", "R$ 12,34 — Página 1"), ("Beta", "R$ 0,99 — Página 2")]
     assert "## 🔷 Alfa - R$ 12,34" in v.embeds()[0].description and v.embeds()[0].description.startswith("Bem-vindo")
 
 
@@ -69,7 +69,9 @@ def test_pagina_aberta_que_deixou_de_existir_volta_para_uma_valida():
 def test_loja_sem_itens_mostra_aviso_e_nao_quebra():
     loja.aplicar_catalogo([], {}, "firebase")
     v = loja.LojaView(None, membro())
-    assert not any(isinstance(c, (loja.AdicionarSelect, loja.PaginaButton)) for c in v.children)
+    assert not any(isinstance(c, loja.PaginaButton) for c in v.children)
+    menu = next(c for c in v.children if isinstance(c, loja.AdicionarSelect))
+    assert [o.value for o in menu.options] == ["indicacao"]                        # só a opção fixa (grátis) continua disponível
     assert "sem itens" in v.embeds()[0].description
     assert next(c for c in v.children if isinstance(c, loja.FinalizarButton)).disabled
 

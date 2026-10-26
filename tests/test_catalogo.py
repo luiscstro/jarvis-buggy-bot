@@ -358,5 +358,5 @@ def test_firebase_que_nao_responde_a_tempo_cai_no_plano_b(tmp_path):
 def test_aplicar_catalogo_da_loja_troca_tudo_de_uma_vez():
     paginas, itens = cat.montar_catalogo({"p1": pagina_doc()}, {"a": item_doc("A", 123)})
     loja.aplicar_catalogo(paginas, itens, "firebase")
-    assert list(loja.ITENS) == ["a"] and loja.CATALOGO_FONTE == "firebase" and loja.ASSINATURA == (("a", 123),)
+    assert list(loja.ITENS) == ["a", "indicacao"] and loja.CATALOGO_FONTE == "firebase" and loja.ASSINATURA == (("a", 123), ("indicacao", 0))
     assert loja.PAGINAS[0]["itens"][0]["preco"] == 123
