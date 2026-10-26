@@ -47,7 +47,7 @@ def preco_txt(centavos: int) -> str:
     return "Grátis" if centavos == 0 else brl(centavos)
 
 
-# Opção FIXA da loja, de R$ 0,00. Não mora no banco (por isso o painel não edita nem apaga) e é sempre
+# Opção FIXA da loja ("Indicação", R$ 0,00). Não mora no banco (por isso o painel não edita nem apaga) e é sempre
 # acrescentada ao catálogo. Nunca entra nos VIPs à escolha dos planos mensais.
 CHAVE_INDICACAO = "indicacao"
 ITEM_INDICACAO = {
