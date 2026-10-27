@@ -244,3 +244,38 @@ def test_diagnostico_mostra_o_canal_de_registro_e_pendencias(cog):
     assert "não pode postar" in texto and "Inserir Links" in texto
     cog.bot.get_channel = lambda id_: None
     assert "não encontrado" in "\n".join(cog._diagnostico_registro(guild))
+
+
+# ---------------------------------------------------------------- poucas requisições (evita 429 / ban da Cloudflare)
+def _pedidos_pagos_sem_anuncio(cog, quantos):
+    for n in range(1, quantos + 1):
+        cog.armazenamento.dados["pedidos"][f"{n:02d}"] = {
+            "id": n, "usuario_id": 5, "usuario": "velho#0", "nome": "Velho", "canal_id": 1, "itens": {"aviso": 1},
+            "total_centavos": 500, "criado_em": "2026-10-01T10:00:00+00:00", "status": "paga", "pago_em": "2026-10-01T10:05:00+00:00",
+        }
+
+
+def test_historico_antigo_sai_aos_poucos_e_nao_de_uma_vez(cog, registro):
+    _pedidos_pagos_sem_anuncio(cog, ben.MAX_ANUNCIOS_POR_RODADA + 2)
+    assert run(cog.retomar_anuncios()) == ben.MAX_ANUNCIOS_POR_RODADA
+    assert len(registro.mensagens) == ben.MAX_ANUNCIOS_POR_RODADA
+    assert run(cog.retomar_anuncios()) == 2 and len(registro.mensagens) == ben.MAX_ANUNCIOS_POR_RODADA + 2
+    assert run(cog.retomar_anuncios()) == 0                            # nada sobrou: nenhuma requisição nova
+
+
+def test_canal_de_registro_inacessivel_e_procurado_uma_vez_e_nao_por_compra(cog):
+    _pedidos_pagos_sem_anuncio(cog, 4)
+    cog.bot.get_channel = lambda id_: None
+    cog.bot.fetch_channel = AsyncMock(side_effect=discord.NotFound(MagicMock(status=404, reason="x"), "Unknown Channel"))
+    run(cog.retomar_anuncios()); run(cog.retomar_anuncios())
+    assert cog.bot.fetch_channel.await_count == 1
+
+
+def test_anuncio_que_falha_recua_antes_de_tentar_de_novo(cog, registro):
+    _pedidos_pagos_sem_anuncio(cog, 1)
+    registro.falhar = discord.Forbidden(MagicMock(status=403, reason="x"), "Missing Access")
+    assert run(cog.retomar_anuncios()) == 0 and registro.envios == 1
+    assert run(cog.retomar_anuncios()) == 0 and registro.envios == 1   # em recuo: não insiste na rodada seguinte
+    cog._falhas_anuncio["01"] = (1, 0.0)                               # passou o recuo
+    registro.falhar = None
+    assert run(cog.retomar_anuncios()) == 1 and "01" not in cog._falhas_anuncio
