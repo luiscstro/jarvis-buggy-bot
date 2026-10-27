@@ -30,3 +30,7 @@ def test_429_pausa_as_rotinas(monkeypatch):
     assert not limites.em_pausa()
     assert limites.registrar_se_limite(_http(429, PAGINA_CLOUDFLARE))
     assert limites.em_pausa() and limites.segundos_de_pausa() > 0
+
+
+def test_espera_do_login_dobra_ate_o_teto():
+    assert [limites.espera_do_login(n) // 60 for n in range(5)] == [15, 30, 60, 120, 120]

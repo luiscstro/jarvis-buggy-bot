@@ -40,3 +40,8 @@ def em_pausa() -> bool:
 
 def segundos_de_pausa() -> int:
     return max(0, int(_pausa_ate - time.monotonic()))
+
+
+def espera_do_login(tentativa: int) -> int:
+    """Segundos de espera depois de um 429 no login: 15, 30, 60 e no máximo 120 minutos."""
+    return min(PAUSA_429_SEGUNDOS * (2 ** max(0, tentativa)), 120 * 60)
