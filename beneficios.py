@@ -27,6 +27,7 @@ import asyncio
 import hashlib
 import os
 import re
+import time
 import traceback
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -51,6 +52,9 @@ CARGO_ASSINANTE_2_ID = int(os.getenv("LOJA_CARGO_ASSINANTE_2_ID", "1558206661779
 IDADE_MINIMA_RECUPERACAO = 90                # s: só retoma resgates parados há mais que isto (não atropela um em andamento)
 INTERVALO_MANUTENCAO = 120                   # s entre as rodadas de retomada
 MAX_TENTATIVAS_RESGATE = 10
+MAX_ANUNCIOS_POR_RODADA = 5                 # anúncios tentados por rodada: o histórico antigo sai aos poucos, sem inundar o canal
+ESPERA_CANAL_REGISTRO = 300                 # s sem procurar de novo o canal de registro depois de uma falha
+ESPERA_MAXIMA_ANUNCIO = 3600                # s: teto do recuo (dobra a cada falha) de um anúncio que não sai
 
 # fixos = (chave do item no catálogo, nome de reserva se o item não existir mais, quantidade)
 NIVEIS = {
@@ -311,6 +315,8 @@ class BeneficiosMixin:
         self._locks_resgate: dict[int, asyncio.Lock] = {}
         self._em_andamento: set[str] = set()
         self._tarefa_manutencao: Optional[asyncio.Task] = None
+        self._canal_registro_falhou_ate = 0.0
+        self._falhas_anuncio: dict[str, tuple[int, float]] = {}   # chave -> (nº de falhas seguidas, não tentar antes de)
 
     # ------------------------------------------------------------ erros
     def _erro_usuario(self, e: Exception, contexto: str) -> str:
@@ -335,10 +341,13 @@ class BeneficiosMixin:
             return None
         canal = self.bot.get_channel(REGISTRO_CANAL_ID)
         if canal is None:
+            if time.monotonic() < self._canal_registro_falhou_ate:
+                return None                                           # já falhou há pouco: não repete a requisição por compra
             try:
                 canal = await self.bot.fetch_channel(REGISTRO_CANAL_ID)
             except discord.DiscordException as e:
                 limites.registrar_se_limite(e)
+                self._canal_registro_falhou_ate = time.monotonic() + ESPERA_CANAL_REGISTRO
                 return None
         return canal
 
@@ -415,16 +424,28 @@ class BeneficiosMixin:
 
     async def retomar_anuncios(self) -> int:
         """Posta o que ficou pendente (bot desligado, canal sem permissão...) e atualiza entregas que não chegaram ao post."""
-        feitos = 0
+        feitos = tentados = 0
         for chave, p in list(self.armazenamento.dados["pedidos"].items()):
             if limites.em_pausa():
                 break                                                 # o Discord limitou este IP: insistir só prolonga o bloqueio
             if p.get("status") not in ("paga", "entregue"):
                 continue
-            if not p.get("anuncio_msg_id"):
-                feitos += bool(await self.anunciar_compra(chave))
-            elif p.get("status") == "entregue" and p.get("anuncio_estado") != "entregue":
-                feitos += bool(await self.atualizar_anuncio(chave))
+            precisa_postar = not p.get("anuncio_msg_id")
+            if not precisa_postar and not (p.get("status") == "entregue" and p.get("anuncio_estado") != "entregue"):
+                continue
+            if time.monotonic() < self._falhas_anuncio.get(chave, (0, 0.0))[1]:
+                continue                                              # falhou há pouco: espera o recuo antes de insistir
+            if tentados >= MAX_ANUNCIOS_POR_RODADA:
+                break
+            tentados += 1
+            ok = await (self.anunciar_compra(chave) if precisa_postar else self.atualizar_anuncio(chave))
+            if ok:
+                self._falhas_anuncio.pop(chave, None)
+                feitos += 1
+            else:
+                n = self._falhas_anuncio.get(chave, (0, 0.0))[0] + 1
+                recuo = min(INTERVALO_MANUTENCAO * (2 ** n), ESPERA_MAXIMA_ANUNCIO)
+                self._falhas_anuncio[chave] = (n, time.monotonic() + recuo)
         return feitos
 
     # ------------------------------------------------------------ benefícios mensais

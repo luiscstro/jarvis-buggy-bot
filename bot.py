@@ -219,6 +219,10 @@ SPAM_COOLDOWN_SECONDS = 30
 # Quando False, o Buggy ignora mensagens de outros bots (padrão seguro).
 # Quando True, o Buggy responde a bots normalmente (risco de loop infinito!).
 responder_a_bots: bool = False
+# Freio do "modo briga com bots": dois bots se respondendo formam um loop que só termina quando alguém o para
+BOT_MAX_RESPOSTAS  = 6      # respostas a bots, por canal
+BOT_JANELA_SEGUNDOS = 60
+_respostas_a_bots: dict[int, list] = {}
 
 # ==============================================
 #  UTILITÁRIOS
@@ -235,6 +239,15 @@ def get_role_label(member: discord.Member) -> str:
         if role.name in STAFF_ROLES:
             return role.name
     return "Membro"
+
+
+def bot_em_loop(channel_id: int) -> bool:
+    """Conta mais uma resposta a um bot neste canal; True se passou do limite da janela."""
+    agora = time.time()
+    recentes = [t for t in _respostas_a_bots.get(channel_id, []) if agora - t < BOT_JANELA_SEGUNDOS]
+    recentes.append(agora)
+    _respostas_a_bots[channel_id] = recentes
+    return len(recentes) > BOT_MAX_RESPOSTAS
 
 
 def is_spamming(user_id: int) -> bool:
@@ -529,6 +542,8 @@ async def executar_acao_admin(message: discord.Message, instrucao: str):
             return
         enviados = []
         for ch in guild.text_channels:
+            if not ch.permissions_for(guild.me).send_messages:
+                continue                                              # evita um 403 por canal (requisição inválida)
             try:
                 await ch.send(texto)
                 enviados.append(ch.mention)
@@ -759,7 +774,14 @@ async def on_message(message: discord.Message):
         if not responder_a_bots:
             await bot.process_commands(message)
             return
-        # Com modo ativo, cai no fluxo normal abaixo (sem anti-spam para bots)
+        # Com modo ativo, cai no fluxo normal abaixo, com o freio de loop entre bots
+        if bot_em_loop(message.channel.id):
+            responder_a_bots = False
+            await message.channel.send(
+                "Chega dessa briga! O grande Buggy desligou o modo briga com bots antes que isso vire um loop. 🤡 "
+                "*(Modo briga com bots: **desativado**)*"
+            )
+            return
 
     # Se é um comando de prefixo (buggy!...), processa direto sem passar pela IA
     if message.content.startswith("buggy!"):

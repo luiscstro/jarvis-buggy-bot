@@ -34,3 +34,11 @@ def test_429_pausa_as_rotinas(monkeypatch):
 
 def test_espera_do_login_dobra_ate_o_teto():
     assert [limites.espera_do_login(n) // 60 for n in range(5)] == [15, 30, 60, 120, 120]
+
+
+def test_freio_de_loop_entre_bots():
+    import bot
+    bot._respostas_a_bots.clear()
+    assert [bot.bot_em_loop(1) for _ in range(bot.BOT_MAX_RESPOSTAS)] == [False] * bot.BOT_MAX_RESPOSTAS
+    assert bot.bot_em_loop(1) is True                                  # a próxima passa do limite
+    assert bot.bot_em_loop(2) is False                                 # outro canal não é afetado
