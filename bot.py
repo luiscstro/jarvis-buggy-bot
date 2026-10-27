@@ -9,6 +9,7 @@ import re
 from typing import Optional
 from dotenv import load_dotenv
 load_dotenv()
+import limites
 from loja import setup_loja
 
 # =============================================
@@ -703,12 +704,24 @@ async def setup_hook():
     await setup_loja(bot, STAFF_ROLES)
 
 
+_slash_limpos = False
+
+
 @bot.event
 async def on_ready():
+    global _slash_limpos
     print(f"🤡 Buggy o Palhaço Estrela está online! Bot: {bot.user}")
-    bot.tree.clear_commands(guild=None)
-    await bot.tree.sync()
-    print("🧹 Slash commands antigos removidos.")
+    # on_ready dispara a cada reconexão com o Discord, não só ao ligar. O sync é uma requisição pesada e
+    # com limite próprio: refazê-lo a cada reconexão ajuda a levar o IP ao bloqueio 1015 da Cloudflare.
+    if not _slash_limpos:
+        try:
+            bot.tree.clear_commands(guild=None)
+            await bot.tree.sync()
+            _slash_limpos = True
+            print("🧹 Slash commands antigos removidos.")
+        except discord.HTTPException as e:
+            limites.registrar_se_limite(e)
+            print(f"[Erro] Não consegui limpar os slash commands: {limites.resumir_erro(e)}")
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
@@ -1421,7 +1434,9 @@ async def on_command_error(ctx: commands.Context, error):
     elif isinstance(error, commands.CommandOnCooldown):
         await ctx.send(f"⏳ Calma! Esse comando pode ser usado de novo em {error.retry_after:.0f}s.")
     else:
-        print(f"[Erro] {error}")
+        original = getattr(error, "original", error)
+        limites.registrar_se_limite(original)
+        print(f"[Erro] {type(original).__name__}: {limites.resumir_erro(original)}")
 
 
 # ==============================================

@@ -35,6 +35,7 @@ from typing import Optional
 import discord
 from discord import ui
 
+import limites
 from catalogo import brl
 from loja_dados import agora_iso
 
@@ -336,7 +337,8 @@ class BeneficiosMixin:
         if canal is None:
             try:
                 canal = await self.bot.fetch_channel(REGISTRO_CANAL_ID)
-            except discord.DiscordException:
+            except discord.DiscordException as e:
+                limites.registrar_se_limite(e)
                 return None
         return canal
 
@@ -380,9 +382,10 @@ class BeneficiosMixin:
                                              anuncio_estado="entregue" if pedido["status"] == "entregue" else "enviado")
                 return True
             except Exception as e:
-                print(f"[Loja] Não consegui registrar a compra {chave} no canal público ({type(e).__name__}: {e}); tento de novo depois.")
+                limites.registrar_se_limite(e)
+                print(f"[Loja] Não consegui registrar a compra {chave} no canal público ({type(e).__name__}: {limites.resumir_erro(e)}); tento de novo depois.")
                 try:
-                    self.armazenamento.atualizar(chave, anuncio_estado="pendente", anuncio_erro=f"{type(e).__name__}: {e}"[:200])
+                    self.armazenamento.atualizar(chave, anuncio_estado="pendente", anuncio_erro=f"{type(e).__name__}: {limites.resumir_erro(e)}"[:200])
                 except Exception:
                     pass
                 return False
@@ -406,13 +409,16 @@ class BeneficiosMixin:
                 self.armazenamento.atualizar(chave, anuncio_estado="entregue" if pedido["status"] == "entregue" else "enviado")
                 return False
             except Exception as e:
-                print(f"[Loja] Não consegui atualizar o post público da compra {chave} ({type(e).__name__}: {e}).")
+                limites.registrar_se_limite(e)
+                print(f"[Loja] Não consegui atualizar o post público da compra {chave} ({type(e).__name__}: {limites.resumir_erro(e)}).")
                 return False
 
     async def retomar_anuncios(self) -> int:
         """Posta o que ficou pendente (bot desligado, canal sem permissão...) e atualiza entregas que não chegaram ao post."""
         feitos = 0
         for chave, p in list(self.armazenamento.dados["pedidos"].items()):
+            if limites.em_pausa():
+                break                                                 # o Discord limitou este IP: insistir só prolonga o bloqueio
             if p.get("status") not in ("paga", "entregue"):
                 continue
             if not p.get("anuncio_msg_id"):
@@ -620,6 +626,8 @@ class BeneficiosMixin:
         feitos = 0
         agora = datetime.now(timezone.utc)
         for chave, doc in await asyncio.to_thread(remoto.listar_beneficios):
+            if limites.em_pausa():
+                break
             try:
                 if doc.get("estado") in ("concluido", "membro_ausente", "falhou") or chave in self._em_andamento:
                     continue
@@ -640,14 +648,18 @@ class BeneficiosMixin:
                     feitos += 1
                     print(f"[Loja] Retomei o benefício {chave}, que tinha ficado pela metade.")
                 except Exception as e:
+                    if limites.registrar_se_limite(e):
+                        break                                         # 429 não é culpa do resgate: não gasta tentativa
                     tentativas = int(doc.get("tentativas", 0)) + 1
                     estado = "falhou" if tentativas >= MAX_TENTATIVAS_RESGATE else doc.get("estado", "reservado")
-                    print(f"[Loja] Falha ao retomar o benefício {chave} (tentativa {tentativas}): {type(e).__name__}: {e}")
+                    print(f"[Loja] Falha ao retomar o benefício {chave} (tentativa {tentativas}): {type(e).__name__}: {limites.resumir_erro(e)}")
                     await asyncio.to_thread(remoto.atualizar_beneficio, chave, {"tentativas": tentativas, "estado": estado, "atualizado_em": agora_iso()})
                 finally:
                     self._em_andamento.discard(chave)
             except Exception as e:
-                print(f"[Loja] Erro ao examinar o benefício {chave}: {type(e).__name__}: {e}")
+                if limites.registrar_se_limite(e):
+                    break
+                print(f"[Loja] Erro ao examinar o benefício {chave}: {type(e).__name__}: {limites.resumir_erro(e)}")
         return feitos
 
     # ------------------------------------------------------------ rotina de retomada
@@ -655,15 +667,23 @@ class BeneficiosMixin:
         """Uma rodada de retomada. Não levanta erro."""
         resultado = [0, 0]
         for i, funcao in enumerate((self.retomar_beneficios, self.retomar_anuncios)):
+            if limites.em_pausa():
+                break
             try:
                 resultado[i] = await funcao()
             except Exception as e:
-                print(f"[Loja] Erro na rotina de retomada ({funcao.__name__}): {type(e).__name__}: {e}")
+                limites.registrar_se_limite(e)
+                print(f"[Loja] Erro na rotina de retomada ({funcao.__name__}): {type(e).__name__}: {limites.resumir_erro(e)}")
         return tuple(resultado)
 
     async def _loop_manutencao(self):
         await asyncio.sleep(5)
         while True:
+            if limites.em_pausa():
+                espera = limites.segundos_de_pausa() + 1
+                print(f"[Loja] Discord limitou as requisições (429): retomada em pausa por {espera}s.")
+                await asyncio.sleep(espera)
+                continue
             await self.manutencao()
             await asyncio.sleep(INTERVALO_MANUTENCAO)
 
