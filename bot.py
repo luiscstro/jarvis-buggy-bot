@@ -6,6 +6,7 @@ import os
 import asyncio
 import time
 import re
+import sys
 from typing import Optional
 from dotenv import load_dotenv
 load_dotenv()
@@ -1443,4 +1444,16 @@ async def on_command_error(ctx: commands.Context, error):
 #  INICIAR BOT
 # ==============================================
 if __name__ == "__main__":
-    bot.run(BOT_TOKEN)
+    try:
+        bot.run(BOT_TOKEN)
+    except discord.HTTPException as e:
+        if not limites.eh_limite(e):
+            raise
+        # O login foi negado pela Cloudflare (IP bloqueado). Sair agora faria a hospedagem reiniciar o bot em
+        # seguida, e cada tentativa nova prolonga o bloqueio: espera quieto e só então reinicia o processo.
+        tentativa = int(os.getenv("BUGGY_TENTATIVAS_LOGIN", "0"))
+        espera = limites.espera_do_login(tentativa)
+        print(f"[Erro] Login negado: {limites.resumir_erro(e)}. Nova tentativa em {espera // 60} min.")
+        time.sleep(espera)
+        os.environ["BUGGY_TENTATIVAS_LOGIN"] = str(tentativa + 1)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
